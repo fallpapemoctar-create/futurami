@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { FileText, Plus, Search, Filter, X, Calendar, User, Building, Euro, Download, Edit, Trash2, Eye, Send, CheckCircle, XCircle, Clock } from "lucide-react";
+import { FileText, Plus, Search, Filter, X, Calendar, User, Building, Euro, Download, Edit, Trash2, Eye, Send, CheckCircle, XCircle, Clock, Receipt } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
 import { StatusChip } from "./StatusChip";
 import { EmptyState } from "./EmptyState";
 import { ViewModeSelector, ViewMode } from "./ViewModeSelector";
-import { useQuotes } from "../../lib/hooks";
+import { useQuotes, crud } from "../../lib/hooks";
+import { EditQuoteModal, type QuoteEditValues } from "./EditQuoteModal";
+import { CreateQuoteModal } from "./CreateQuoteModal";
 
 interface Devis {
   id: string;
@@ -37,7 +39,10 @@ export function DevisPage() {
     expired: "Expiré",
   };
 
-  const devis: Devis[] = useQuotes({ pageSize: 100 }).data.quotes.map((q) => ({
+  const quotesQuery = useQuotes({ pageSize: 100 });
+  const rawQuotes = quotesQuery.data.quotes;
+
+  const devis: Devis[] = rawQuotes.map((q) => ({
     id: String(q.id),
     reference: `DEV-${String(q.id).padStart(6, "0")}`,
     client: q.client_name || "",
@@ -49,6 +54,78 @@ export function DevisPage() {
     status: quoteStatusMap[q.status] || "Brouillon",
     missions: q.mission_id ? 1 : 0,
   }));
+
+  const [editingQuote, setEditingQuote] = useState<QuoteEditValues | null>(null);
+  const [isEditQuoteOpen, setIsEditQuoteOpen] = useState(false);
+  const [isCreateQuoteOpen, setIsCreateQuoteOpen] = useState(false);
+
+  // Bandeau succès / erreur non-bloquant après création manuelle d'un devis.
+  const [flash, setFlash] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+
+  const handleNewQuote = () => {
+    // Ouvre la modale de création manuelle (client + lignes libres).
+    setIsCreateQuoteOpen(true);
+  };
+
+  const handleViewQuote = (d: Devis) => {
+    const q = rawQuotes.find((x) => String(x.id) === d.id);
+    if (!q) return;
+    const lines = [
+      `Devis ${d.reference}`,
+      `Client : ${d.client || "—"}`,
+      `Créé le : ${d.dateCreation || "—"}`,
+      `Valable jusqu'au : ${d.dateExpiration || "—"}`,
+      `Statut : ${d.status}`,
+      `Total HT : ${d.montantHT.toFixed(2)} €`,
+      q.notes ? `\nNotes :\n${q.notes}` : "",
+      q.converted_invoice_number ? `\nConverti en facture : ${q.converted_invoice_number}` : "",
+    ].filter(Boolean).join("\n");
+    alert(lines);
+  };
+
+  const handleEditQuote = (d: Devis) => {
+    const q = rawQuotes.find((x) => String(x.id) === d.id);
+    if (!q) return;
+    setEditingQuote({
+      quote_id: q.id,
+      status: q.status || "draft",
+      notes: q.notes || "",
+      date_valid_until: (q.date_valid_until || "").slice(0, 10),
+    });
+    setIsEditQuoteOpen(true);
+  };
+
+  const handleSaveQuote = async (values: QuoteEditValues) => {
+    try {
+      await crud.updateQuote(values);
+      quotesQuery.refetch();
+    } catch (e: any) {
+      console.error("Mise à jour devis impossible", e);
+      alert(e?.response?.data?.error || "Mise à jour du devis impossible");
+    }
+  };
+
+  const handleDeleteQuote = (_d: Devis) => {
+    alert("La suppression définitive d'un devis n'est pas supportée. Passez son statut à « Refusé » ou « Expiré » via Modifier.");
+  };
+
+  const handleConvertToInvoice = async (d: Devis) => {
+    const q = rawQuotes.find((x) => String(x.id) === d.id);
+    if (!q) return;
+    if (q.status !== "accepted") {
+      alert("Seuls les devis au statut « Accepté » peuvent être convertis en facture.");
+      return;
+    }
+    if (!confirm(`Convertir le devis ${d.reference} en facture client ?`)) return;
+    try {
+      const res = await crud.convertQuoteToInvoice(q.id);
+      alert(`Facture créée : ${res?.invoice_number ?? "(numéro indisponible)"}`);
+      quotesQuery.refetch();
+    } catch (e: any) {
+      console.error("Conversion devis impossible", e);
+      alert(e?.response?.data?.error || "Conversion du devis en facture impossible");
+    }
+  };
 
   const filteredDevis = devis.filter((d) => {
     const matchesSearch =
@@ -186,6 +263,7 @@ export function DevisPage() {
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              onClick={handleNewQuote}
               className="flex items-center gap-2 px-4 py-2.5 text-white rounded-lg text-sm font-medium"
               style={{ backgroundColor: currentTheme.colors.primary }}
             >
@@ -244,7 +322,7 @@ export function DevisPage() {
             !searchQuery && statusFilter === "all"
               ? {
                   label: "Créer un devis",
-                  onClick: () => alert("Créer un nouveau devis"),
+                  onClick: handleNewQuote,
                 }
               : undefined
           }
@@ -252,12 +330,60 @@ export function DevisPage() {
       ) : viewMode === "cards" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredDevis.map((devis, index) => (
-            <DevisCard key={devis.id} devis={devis} delay={index * 0.05} currentTheme={currentTheme} />
+            <DevisCard key={devis.id} devis={devis} delay={index * 0.05} currentTheme={currentTheme} onView={handleViewQuote} onEdit={handleEditQuote} onDelete={handleDeleteQuote} onConvert={handleConvertToInvoice} />
           ))}
         </div>
       ) : (
-        <DevisTable devis={filteredDevis} currentTheme={currentTheme} />
+        <DevisTable devis={filteredDevis} currentTheme={currentTheme} onView={handleViewQuote} onEdit={handleEditQuote} onDelete={handleDeleteQuote} onConvert={handleConvertToInvoice} />
       )}
+
+      <EditQuoteModal
+        isOpen={isEditQuoteOpen}
+        onClose={() => {
+          setIsEditQuoteOpen(false);
+          setEditingQuote(null);
+        }}
+        quote={editingQuote}
+        onSave={handleSaveQuote}
+      />
+
+      {/* Modale de création manuelle d'un devis (sans mission source) */}
+      <CreateQuoteModal
+        isOpen={isCreateQuoteOpen}
+        onClose={() => setIsCreateQuoteOpen(false)}
+        onCreated={(res) => {
+          quotesQuery.refetch();
+          setFlash({
+            type: "success",
+            msg: `Devis #${res.quote_id} créé (total ${res.total_ht.toFixed(2)} € HT).`,
+          });
+          window.setTimeout(() => setFlash(null), 6000);
+        }}
+        onError={(msg) => {
+          setFlash({ type: "error", msg });
+          window.setTimeout(() => setFlash(null), 8000);
+        }}
+      />
+
+      {/* Toast flottant non bloquant — rendu en haut de la page */}
+      <AnimatePresence>
+        {flash && (
+          <motion.div
+            initial={{ y: -20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -20, opacity: 0 }}
+            role="status"
+            className="fixed top-4 right-4 z-50 px-5 py-3 rounded-lg shadow-lg border text-sm font-medium max-w-md"
+            style={{
+              backgroundColor: flash.type === "success" ? "#ECFDF5" : "#FEF2F2",
+              borderColor: flash.type === "success" ? "#A7F3D0" : "#FECACA",
+              color: flash.type === "success" ? "#065F46" : "#991B1B",
+            }}
+          >
+            {flash.msg}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -280,7 +406,7 @@ function StatCard({ label, value, color, bgColor }: { label: string; value: numb
   );
 }
 
-function DevisCard({ devis, delay, currentTheme }: { devis: Devis; delay: number; currentTheme: any }) {
+function DevisCard({ devis, delay, currentTheme, onView, onEdit, onDelete, onConvert }: { devis: Devis; delay: number; currentTheme: any; onView: (d: Devis) => void; onEdit: (d: Devis) => void; onDelete: (d: Devis) => void; onConvert: (d: Devis) => void }) {
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}
@@ -345,6 +471,7 @@ function DevisCard({ devis, delay, currentTheme }: { devis: Devis; delay: number
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
+            onClick={() => onView(devis)}
             className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
             style={{
               backgroundColor: currentTheme.colors.primaryLight,
@@ -358,6 +485,7 @@ function DevisCard({ devis, delay, currentTheme }: { devis: Devis; delay: number
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
+            onClick={() => onEdit(devis)}
             className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
             style={{
               backgroundColor: currentTheme.colors.primaryLight,
@@ -367,9 +495,22 @@ function DevisCard({ devis, delay, currentTheme }: { devis: Devis; delay: number
           >
             <Edit className="w-4 h-4" />
           </motion.button>
+          {devis.status === "accepted" && (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => onConvert(devis)}
+              className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-white"
+              style={{ backgroundColor: currentTheme.colors.success }}
+              title="Convertir en facture"
+            >
+              <Receipt className="w-4 h-4" />
+            </motion.button>
+          )}
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
+            onClick={() => onDelete(devis)}
             className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-medium"
             style={{
               backgroundColor: currentTheme.colors.error + "20",
@@ -385,7 +526,7 @@ function DevisCard({ devis, delay, currentTheme }: { devis: Devis; delay: number
   );
 }
 
-function DevisTable({ devis, currentTheme }: { devis: Devis[]; currentTheme: any }) {
+function DevisTable({ devis, currentTheme, onView, onEdit, onDelete, onConvert }: { devis: Devis[]; currentTheme: any; onView: (d: Devis) => void; onEdit: (d: Devis) => void; onDelete: (d: Devis) => void; onConvert: (d: Devis) => void }) {
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}
@@ -480,6 +621,7 @@ function DevisTable({ devis, currentTheme }: { devis: Devis[]; currentTheme: any
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-center gap-2">
                     <button
+                      onClick={() => onView(d)}
                       className="p-1.5 hover:bg-opacity-20 rounded transition-colors"
                       style={{ color: currentTheme.colors.primary }}
                       title="Voir"
@@ -487,13 +629,25 @@ function DevisTable({ devis, currentTheme }: { devis: Devis[]; currentTheme: any
                       <Eye className="w-4 h-4" />
                     </button>
                     <button
+                      onClick={() => onEdit(d)}
                       className="p-1.5 hover:bg-opacity-20 rounded transition-colors"
                       style={{ color: currentTheme.colors.primary }}
                       title="Modifier"
                     >
                       <Edit className="w-4 h-4" />
                     </button>
+                    {d.status === "accepted" && (
+                      <button
+                        onClick={() => onConvert(d)}
+                        className="p-1.5 hover:bg-opacity-20 rounded transition-colors"
+                        style={{ color: currentTheme.colors.success }}
+                        title="Convertir en facture"
+                      >
+                        <Receipt className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
+                      onClick={() => onDelete(d)}
                       className="p-1.5 hover:bg-opacity-20 rounded transition-colors"
                       style={{ color: currentTheme.colors.error }}
                       title="Supprimer"

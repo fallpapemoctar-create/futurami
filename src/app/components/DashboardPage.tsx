@@ -11,6 +11,7 @@ import {
   ArrowDown,
 } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
+import { useInterpreters, useMissions, useClientInvoices } from "../../lib/hooks";
 import {
   BarChart,
   Bar,
@@ -31,50 +32,141 @@ export function DashboardPage() {
   const { currentTheme } = useTheme();
   const [selectedPeriod, setSelectedPeriod] = useState<"week" | "month" | "year">("month");
 
-  // Données de démonstration
+  // Données réelles via API
+  const { data: interpretersData } = useInterpreters();
+  // pageSize élevé pour permettre les agrégations client-side (graphes).
+  // Le total réel provient de missionsData.total (renvoyé par le backend).
+  const { data: missionsData } = useMissions({ page: 1, pageSize: 2000 });
+  const { data: invoicesData } = useClientInvoices({ page: 1, pageSize: 500 });
+
+  const totalRevenue = useMemo(
+    () => invoicesData.invoices.reduce((sum, inv) => sum + (Number(inv.invoice_total_ttc) || 0), 0),
+    [invoicesData]
+  );
+
+  // Agrégations réelles (client-side) à partir des missions + factures chargées.
   const stats = useMemo(() => {
-    return {
-      totalMissions: 20000,
-      totalInterpreters: 150,
-      totalRevenue: 450000,
-      averagePerDay: 67,
-      growth: {
-        missions: 12.5,
-        revenue: 8.3,
-        interpreters: 5.2,
-      },
-      // Missions par type
-      missionsByType: [
-        { name: "Tribunal judiciaire", value: 8500, color: currentTheme.colors.primary },
-        { name: "Traduction", value: 6200, color: currentTheme.colors.secondary },
-        { name: "Interprétariat", value: 5300, color: currentTheme.colors.accent },
-      ],
-      // Évolution mensuelle
-      monthlyTrend: [
-        { month: "Jan", missions: 1650, revenue: 35000 },
-        { month: "Fév", missions: 1720, revenue: 36500 },
-        { month: "Mar", missions: 1800, revenue: 38200 },
-        { month: "Avr", missions: 1680, revenue: 37100 },
-        { month: "Mai", missions: 1850, revenue: 39800 },
-        { month: "Juin", missions: 1920, revenue: 41200 },
-      ],
-      // Top interprètes
-      topInterpreters: [
-        { name: "ABBAS AZHAR", missions: 145, revenue: 12400 },
-        { name: "ABAD ANNA", missions: 132, revenue: 11800 },
-        { name: "ABBASSOV NATELLA", missions: 128, revenue: 11200 },
-        { name: "ABDALJABAR TAREK", missions: 119, revenue: 10500 },
-        { name: "NELLY", missions: 115, revenue: 10100 },
-      ],
-      // Statuts missions
-      missionsByStatus: [
-        { name: "Validées", count: 12500, color: currentTheme.colors.statusAccepted.text },
-        { name: "Terminées", count: 6200, color: currentTheme.colors.success },
-        { name: "En attente", count: 980, color: currentTheme.colors.statusExpired.text },
-        { name: "Annulées", count: 320, color: currentTheme.colors.statusCancelled.text },
-      ],
+    const missions = missionsData.missions ?? [];
+    const invoices = invoicesData.invoices ?? [];
+    const totalMissions = missionsData.total ?? 0;
+    const totalInterpreters = interpretersData.length ?? 0;
+    const averagePerDay = Math.max(1, Math.round(totalMissions / 30));
+
+    // ─── Helpers ─────────────────────────────────────────────────────────
+    const monthKey = (iso: string | null | undefined): string | null => {
+      if (!iso) return null;
+      // Formats attendus: 'YYYY-MM-DD', 'YYYY-MM-DD HH:MM:SS', ISO
+      const m = /^(\d{4})-(\d{2})/.exec(iso);
+      return m ? `${m[1]}-${m[2]}` : null;
     };
-  }, [currentTheme]);
+    const MONTH_LABELS_FR = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"];
+
+    // ─── 1) Évolution mensuelle sur les 6 derniers mois glissants ───────
+    const now = new Date();
+    const windowMonths: { key: string; label: string }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      windowMonths.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+        label: MONTH_LABELS_FR[d.getMonth()],
+      });
+    }
+    const missionsPerMonth: Record<string, number> = {};
+    for (const mo of windowMonths) missionsPerMonth[mo.key] = 0;
+    for (const m of missions) {
+      const k = monthKey(m.datemission_iso || m.datemission);
+      if (k && k in missionsPerMonth) missionsPerMonth[k]++;
+    }
+    const revenuePerMonth: Record<string, number> = {};
+    for (const mo of windowMonths) revenuePerMonth[mo.key] = 0;
+    for (const inv of invoices) {
+      const k = monthKey(inv.billed_at || inv.created_at);
+      if (k && k in revenuePerMonth) {
+        revenuePerMonth[k] += Number(inv.invoice_total_ttc) || 0;
+      }
+    }
+    const monthlyTrend = windowMonths.map((mo) => ({
+      month: mo.label,
+      missions: missionsPerMonth[mo.key],
+      revenue: Math.round(revenuePerMonth[mo.key]),
+    }));
+
+    // ─── 2) Répartition par type (top 5) ────────────────────────────────
+    const typeCounts: Record<string, number> = {};
+    for (const m of missions) {
+      const t = (m.produit_label || m.produit_ref || "Autres").trim() || "Autres";
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
+    const typePalette = [
+      currentTheme.colors.primary,
+      currentTheme.colors.secondary,
+      currentTheme.colors.accent,
+      currentTheme.colors.success,
+      currentTheme.colors.statusExpired.text,
+    ];
+    const missionsByType = Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, value], i) => ({ name, value, color: typePalette[i % typePalette.length] }));
+
+    // ─── 3) Top 5 interprètes (par nb missions) ─────────────────────────
+    const interpreterCounts: Record<string, number> = {};
+    for (const m of missions) {
+      const name =
+        (m.interpreter_name && m.interpreter_name.trim()) ||
+        [m.lastname, m.firstname].filter(Boolean).join(" ").trim() ||
+        "";
+      if (!name || name === "—") continue;
+      interpreterCounts[name] = (interpreterCounts[name] || 0) + 1;
+    }
+    const topInterpreters = Object.entries(interpreterCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, missions: count }));
+
+    // ─── 4) Statuts missions (0=Brouillon, 1=Validée, 2=Terminée, 3=Annulée) ─
+    const statusBuckets = [
+      { code: 1, name: "Validées", color: currentTheme.colors.statusAccepted.text },
+      { code: 2, name: "Terminées", color: currentTheme.colors.success },
+      { code: 0, name: "En attente", color: currentTheme.colors.statusExpired.text },
+      { code: 3, name: "Annulées", color: currentTheme.colors.statusCancelled.text },
+    ];
+    const statusCounts: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    for (const m of missions) {
+      const c = Number(m.mission_status);
+      if (c in statusCounts) statusCounts[c]++;
+    }
+    const missionsByStatus = statusBuckets.map((b) => ({
+      name: b.name,
+      count: statusCounts[b.code] || 0,
+      color: b.color,
+    }));
+
+    // ─── 5) Growth : mois courant vs mois précédent ─────────────────────
+    const lastKey = windowMonths[windowMonths.length - 1].key;
+    const prevKey = windowMonths[windowMonths.length - 2].key;
+    const pct = (curr: number, prev: number): number => {
+      if (!prev) return 0;
+      return Math.round(((curr - prev) / prev) * 100 * 10) / 10;
+    };
+    const growth = {
+      missions: pct(missionsPerMonth[lastKey], missionsPerMonth[prevKey]),
+      revenue: pct(revenuePerMonth[lastKey], revenuePerMonth[prevKey]),
+      interpreters: 0, // pas d'historique fiable côté API
+    };
+
+    return {
+      totalMissions,
+      totalInterpreters,
+      totalRevenue,
+      averagePerDay,
+      growth,
+      missionsByType,
+      monthlyTrend,
+      topInterpreters,
+      missionsByStatus,
+    };
+  }, [currentTheme, missionsData, interpretersData, invoicesData, totalRevenue]);
 
   const kpiCards = [
     {
@@ -339,6 +431,11 @@ export function DashboardPage() {
             Top 5 Interprètes
           </h3>
           <div className="space-y-4">
+            {stats.topInterpreters.length === 0 && (
+              <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>
+                Aucune mission avec interprète assigné dans la période chargée.
+              </p>
+            )}
             {stats.topInterpreters.map((interpreter, index) => (
               <div
                 key={interpreter.name}
@@ -357,12 +454,12 @@ export function DashboardPage() {
                       {interpreter.name}
                     </p>
                     <p className="text-xs" style={{ color: currentTheme.colors.textLight }}>
-                      {interpreter.missions} missions
+                      {interpreter.missions} mission{interpreter.missions > 1 ? "s" : ""}
                     </p>
                   </div>
                 </div>
                 <p className="font-bold" style={{ color: currentTheme.colors.success }}>
-                  {interpreter.revenue.toLocaleString()} €
+                  {interpreter.missions}
                 </p>
               </div>
             ))}
@@ -384,30 +481,34 @@ export function DashboardPage() {
             Statuts des missions
           </h3>
           <div className="space-y-3">
-            {stats.missionsByStatus.map((status) => (
-              <div key={status.name} className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium" style={{ color: currentTheme.colors.text }}>
-                    {status.name}
-                  </span>
-                  <span className="text-sm font-bold" style={{ color: status.color }}>
-                    {status.count.toLocaleString()}
-                  </span>
-                </div>
-                <div
-                  className="h-2 rounded-full"
-                  style={{ backgroundColor: currentTheme.colors.border }}
-                >
+            {stats.missionsByStatus.map((status) => {
+              const totalForBar = stats.missionsByStatus.reduce((s, x) => s + x.count, 0);
+              const pct = totalForBar > 0 ? (status.count / totalForBar) * 100 : 0;
+              return (
+                <div key={status.name} className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium" style={{ color: currentTheme.colors.text }}>
+                      {status.name}
+                    </span>
+                    <span className="text-sm font-bold" style={{ color: status.color }}>
+                      {status.count.toLocaleString()}
+                    </span>
+                  </div>
                   <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{
-                      backgroundColor: status.color,
-                      width: `${(status.count / stats.totalMissions) * 100}%`,
-                    }}
-                  />
+                    className="h-2 rounded-full"
+                    style={{ backgroundColor: currentTheme.colors.border }}
+                  >
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        backgroundColor: status.color,
+                        width: `${pct}%`,
+                      }}
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
       </div>

@@ -1,9 +1,20 @@
 import { useState } from "react";
 import { motion } from "motion/react";
-import { Shield, Plus, Edit, Trash2, Search, UserCheck, UserX, Download, FileSpreadsheet } from "lucide-react";
+import { Shield, Plus, Edit, Trash2, Search, UserCheck, UserX, Download, FileSpreadsheet, Languages, CreditCard, Landmark, Users as UsersIcon } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
 import { EditUserModal } from "./EditUserModal";
-import { useUsers, crud, type RawUser } from "../../lib/hooks";
+import { ReferentielFormModal, type ReferentielField } from "./ReferentielFormModal";
+import {
+  useUsers,
+  useLanguages,
+  usePaymentTerms,
+  useBankAccounts,
+  crud,
+  type RawUser,
+  type RefLanguage,
+  type RefPaymentTerm,
+  type RefBankAccount,
+} from "../../lib/hooks";
 
 interface User {
   id: string;
@@ -18,6 +29,7 @@ interface User {
 
 export function AdminPage() {
   const { currentTheme } = useTheme();
+  const [activeTab, setActiveTab] = useState<"users" | "languages" | "paymentTerms" | "bankAccounts">("users");
   const [searchQuery, setSearchQuery] = useState("");
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -156,6 +168,13 @@ export function AdminPage() {
     { key: "admin", label: "Admin", description: "Administration du système" },
   ];
 
+  const tabs: { key: typeof activeTab; label: string; icon: typeof UsersIcon }[] = [
+    { key: "users", label: "Utilisateurs", icon: UsersIcon },
+    { key: "languages", label: "Langues", icon: Languages },
+    { key: "paymentTerms", label: "Termes de paiement", icon: CreditCard },
+    { key: "bankAccounts", label: "Comptes bancaires", icon: Landmark },
+  ];
+
   return (
     <div className="max-w-[1600px] mx-auto px-8 py-6">
       <div className="flex items-center justify-between mb-6">
@@ -164,44 +183,84 @@ export function AdminPage() {
             Administration
           </h2>
           <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>
-            Gestion des utilisateurs et des permissions · {filteredUsers.length} utilisateur{filteredUsers.length > 1 ? "s" : ""}
+            {activeTab === "users"
+              ? `Gestion des utilisateurs et des permissions · ${filteredUsers.length} utilisateur${filteredUsers.length > 1 ? "s" : ""}`
+              : "Référentiels de l'entité · propres à votre structure"}
           </p>
         </div>
-        <div className="flex gap-2">
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => handleExportUsers("excel")}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-            style={{ backgroundColor: currentTheme.colors.success }}
-            title="Exporter en Excel"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Excel</span>
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => handleExportUsers("csv")}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-            style={{ backgroundColor: currentTheme.colors.secondary }}
-            title="Exporter en CSV"
-          >
-            <Download className="w-4 h-4" />
-            <span>CSV</span>
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
-            style={{ backgroundColor: currentTheme.colors.primary }}
-          >
-            <Plus className="w-5 h-5" />
-            <span>Ajouter un utilisateur</span>
-          </motion.button>
-        </div>
+        {activeTab === "users" && (
+          <div className="flex gap-2">
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => handleExportUsers("excel")}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+              style={{ backgroundColor: currentTheme.colors.success }}
+              title="Exporter en Excel"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Excel</span>
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => handleExportUsers("csv")}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+              style={{ backgroundColor: currentTheme.colors.secondary }}
+              title="Exporter en CSV"
+            >
+              <Download className="w-4 h-4" />
+              <span>CSV</span>
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => {
+                setEditingUser(null);
+                setIsEditModalOpen(true);
+              }}
+              className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
+              style={{ backgroundColor: currentTheme.colors.primary }}
+            >
+              <Plus className="w-5 h-5" />
+              <span>Ajouter un utilisateur</span>
+            </motion.button>
+          </div>
+        )}
       </div>
 
+      <div
+        className="flex items-center gap-1 p-1 rounded-lg border mb-6 w-fit"
+        style={{
+          backgroundColor: currentTheme.colors.surface,
+          borderColor: currentTheme.colors.border,
+        }}
+      >
+        {tabs.map((tab) => {
+          const TabIcon = tab.icon;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all"
+              style={{
+                backgroundColor: activeTab === tab.key ? currentTheme.colors.primary : "transparent",
+                color: activeTab === tab.key ? "#FFFFFF" : currentTheme.colors.text,
+              }}
+            >
+              <TabIcon className="w-4 h-4" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === "languages" && <LanguagesSection currentTheme={currentTheme} />}
+      {activeTab === "paymentTerms" && <PaymentTermsSection currentTheme={currentTheme} />}
+      {activeTab === "bankAccounts" && <BankAccountsSection currentTheme={currentTheme} />}
+
+      {activeTab === "users" && (
+      <>
       <motion.div
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -411,6 +470,419 @@ export function AdminPage() {
         onClose={handleCloseModal}
         user={editingUser}
         onSave={handleSaveUser}
+      />
+      </>
+      )}
+    </div>
+  );
+}
+
+// ─── Référentiels : Langues / prestations ────────────────────────────────────
+
+const languageFields: ReferentielField[] = [
+  { key: "label", label: "Libellé", type: "text", required: true },
+  { key: "ref", label: "Référence", type: "text", placeholder: "Générée automatiquement si vide" },
+  { key: "price", label: "Prix HT", type: "number", step: "0.01" },
+  { key: "price_ttc", label: "Prix TTC", type: "number", step: "0.01" },
+  { key: "tva_tx", label: "TVA (%)", type: "number", step: "0.01" },
+];
+
+function LanguagesSection({ currentTheme }: { currentTheme: any }) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [editing, setEditing] = useState<RefLanguage | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const languagesQuery = useLanguages(searchQuery);
+
+  const handleSave = async (values: Record<string, any>) => {
+    await crud.saveLanguage({
+      id: editing?.id ?? undefined,
+      label: values.label,
+      ref: values.ref || undefined,
+      price: values.price !== "" ? Number(values.price) : undefined,
+      price_ttc: values.price_ttc !== "" ? Number(values.price_ttc) : undefined,
+      tva_tx: values.tva_tx !== "" ? Number(values.tva_tx) : undefined,
+    });
+    languagesQuery.refetch();
+    setIsModalOpen(false);
+    setEditing(null);
+  };
+
+  const handleDelete = async (language: RefLanguage) => {
+    if (!language.id) return;
+    if (!window.confirm(`Désactiver la langue « ${language.label} » ?`)) return;
+    await crud.deleteLanguage(language.id);
+    languagesQuery.refetch();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-4">
+        <div className="relative flex-1 max-w-md">
+          <Search
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5"
+            style={{ color: currentTheme.colors.textLight }}
+          />
+          <input
+            type="text"
+            placeholder="Rechercher une langue..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-12 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 transition-all"
+            style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }}
+          />
+        </div>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => {
+            setEditing(null);
+            setIsModalOpen(true);
+          }}
+          className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
+          style={{ backgroundColor: currentTheme.colors.primary }}
+        >
+          <Plus className="w-5 h-5" />
+          <span>Ajouter une langue</span>
+        </motion.button>
+      </div>
+
+      <motion.div
+        initial={{ y: 20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className="rounded-xl border overflow-hidden shadow-sm"
+        style={{ backgroundColor: currentTheme.colors.surface, borderColor: currentTheme.colors.border }}
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr style={{ backgroundColor: currentTheme.colors.primaryLight }}>
+                <th className="px-4 py-3 text-left text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Référence</th>
+                <th className="px-4 py-3 text-left text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Libellé</th>
+                <th className="px-4 py-3 text-right text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Prix HT</th>
+                <th className="px-4 py-3 text-right text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Prix TTC</th>
+                <th className="px-4 py-3 text-right text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>TVA</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {languagesQuery.data.map((lang) => (
+                <tr key={lang.id ?? lang.ref} className="border-b" style={{ borderColor: currentTheme.colors.border }}>
+                  <td className="px-4 py-3 text-sm" style={{ color: currentTheme.colors.text }}>{lang.ref}</td>
+                  <td className="px-4 py-3 text-sm font-medium" style={{ color: currentTheme.colors.text }}>{lang.label || lang.display_name}</td>
+                  <td className="px-4 py-3 text-sm text-right" style={{ color: currentTheme.colors.text }}>{lang.price != null ? lang.price.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-3 text-sm text-right" style={{ color: currentTheme.colors.text }}>{lang.price_ttc != null ? lang.price_ttc.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-3 text-sm text-right" style={{ color: currentTheme.colors.text }}>{lang.tva_tx != null ? `${lang.tva_tx}%` : "—"}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-center gap-2">
+                      <button
+                        onClick={() => { setEditing(lang); setIsModalOpen(true); }}
+                        className="p-1.5 rounded-lg text-white"
+                        style={{ backgroundColor: currentTheme.colors.secondary }}
+                        title="Modifier"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(lang)}
+                        className="p-1.5 rounded-lg text-white"
+                        style={{ backgroundColor: currentTheme.colors.error }}
+                        title="Désactiver"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {languagesQuery.data.length === 0 && (
+            <div className="p-8 text-center text-sm" style={{ color: currentTheme.colors.textLight }}>
+              Aucune langue pour cette entité.
+            </div>
+          )}
+        </div>
+      </motion.div>
+
+      <ReferentielFormModal
+        isOpen={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setEditing(null); }}
+        onSave={handleSave}
+        title={editing ? "Modifier la langue" : "Ajouter une langue"}
+        fields={languageFields}
+        initialValues={editing ? { label: editing.label, ref: editing.ref, price: editing.price ?? "", price_ttc: editing.price_ttc ?? "", tva_tx: editing.tva_tx ?? "" } : {}}
+      />
+    </div>
+  );
+}
+
+// ─── Référentiels : Termes de paiement ───────────────────────────────────────
+
+const paymentTermFields: ReferentielField[] = [
+  { key: "label", label: "Libellé", type: "text", required: true },
+  { key: "label_facture", label: "Libellé facture", type: "text" },
+  { key: "code", label: "Code", type: "text", placeholder: "Généré automatiquement si vide" },
+  { key: "days", label: "Nombre de jours", type: "number" },
+  { key: "shift", label: "Décalage", type: "number" },
+];
+
+function PaymentTermsSection({ currentTheme }: { currentTheme: any }) {
+  const [editing, setEditing] = useState<RefPaymentTerm | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const termsQuery = usePaymentTerms(null);
+
+  const handleSave = async (values: Record<string, any>) => {
+    await crud.savePaymentTerm({
+      id: editing?.id ?? undefined,
+      label: values.label,
+      label_facture: values.label_facture || undefined,
+      code: values.code || undefined,
+      days: values.days !== "" ? Number(values.days) : undefined,
+      shift: values.shift !== "" ? Number(values.shift) : undefined,
+    });
+    termsQuery.refetch();
+    setIsModalOpen(false);
+    setEditing(null);
+  };
+
+  const handleDelete = async (term: RefPaymentTerm) => {
+    if (!window.confirm(`Désactiver le terme de paiement « ${term.label} » ?`)) return;
+    await crud.deletePaymentTerm(term.id);
+    termsQuery.refetch();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-end mb-4">
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => { setEditing(null); setIsModalOpen(true); }}
+          className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
+          style={{ backgroundColor: currentTheme.colors.primary }}
+        >
+          <Plus className="w-5 h-5" />
+          <span>Ajouter un terme de paiement</span>
+        </motion.button>
+      </div>
+
+      <motion.div
+        initial={{ y: 20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className="rounded-xl border overflow-hidden shadow-sm"
+        style={{ backgroundColor: currentTheme.colors.surface, borderColor: currentTheme.colors.border }}
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr style={{ backgroundColor: currentTheme.colors.primaryLight }}>
+                <th className="px-4 py-3 text-left text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Code</th>
+                <th className="px-4 py-3 text-left text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Libellé</th>
+                <th className="px-4 py-3 text-right text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Jours</th>
+                <th className="px-4 py-3 text-right text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Décalage</th>
+                <th className="px-4 py-3 text-center text-sm font-semibold" style={{ color: currentTheme.colors.primary }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {termsQuery.data.terms.map((term) => (
+                <tr key={term.id} className="border-b" style={{ borderColor: currentTheme.colors.border }}>
+                  <td className="px-4 py-3 text-sm" style={{ color: currentTheme.colors.text }}>{term.code}</td>
+                  <td className="px-4 py-3 text-sm font-medium" style={{ color: currentTheme.colors.text }}>{term.label}</td>
+                  <td className="px-4 py-3 text-sm text-right" style={{ color: currentTheme.colors.text }}>{term.days}</td>
+                  <td className="px-4 py-3 text-sm text-right" style={{ color: currentTheme.colors.text }}>{term.shift}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-center gap-2">
+                      <button
+                        onClick={() => { setEditing(term); setIsModalOpen(true); }}
+                        className="p-1.5 rounded-lg text-white"
+                        style={{ backgroundColor: currentTheme.colors.secondary }}
+                        title="Modifier"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(term)}
+                        className="p-1.5 rounded-lg text-white"
+                        style={{ backgroundColor: currentTheme.colors.error }}
+                        title="Désactiver"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {termsQuery.data.terms.length === 0 && (
+            <div className="p-8 text-center text-sm" style={{ color: currentTheme.colors.textLight }}>
+              Aucun terme de paiement pour cette entité.
+            </div>
+          )}
+        </div>
+      </motion.div>
+
+      <ReferentielFormModal
+        isOpen={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setEditing(null); }}
+        onSave={handleSave}
+        title={editing ? "Modifier le terme de paiement" : "Ajouter un terme de paiement"}
+        fields={paymentTermFields}
+        initialValues={editing ? { label: editing.label, code: editing.code, days: editing.days, shift: editing.shift } : {}}
+      />
+    </div>
+  );
+}
+
+// ─── Référentiels : Comptes bancaires ────────────────────────────────────────
+// Pas de duplication automatique depuis l'entité 1 (décision explicite) :
+// chaque entité saisit ses propres comptes bancaires via ce CRUD.
+
+const bankAccountFields: ReferentielField[] = [
+  { key: "bankLabel", label: "Libellé", type: "text", required: true },
+  { key: "bankName", label: "Banque", type: "text" },
+  { key: "bankIban", label: "IBAN", type: "text" },
+  { key: "bankBic", label: "BIC", type: "text" },
+  { key: "bankCode", label: "Code banque", type: "text" },
+  { key: "bankBranchCode", label: "Code guichet", type: "text" },
+  { key: "bankAccountNumber", label: "N° de compte", type: "text" },
+  { key: "bankRibKey", label: "Clé RIB", type: "text" },
+  { key: "bankDomiciliation", label: "Domiciliation", type: "text" },
+  { key: "bankAccountHolder", label: "Titulaire du compte", type: "text" },
+  { key: "bankOwnerAddress", label: "Adresse du titulaire", type: "text" },
+  { key: "bankOwnerPostalCode", label: "Code postal", type: "text" },
+  { key: "bankOwnerCity", label: "Ville", type: "text" },
+];
+
+function BankAccountsSection({ currentTheme }: { currentTheme: any }) {
+  const [editing, setEditing] = useState<RefBankAccount | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const accountsQuery = useBankAccounts();
+
+  const handleSave = async (values: Record<string, any>) => {
+    await crud.saveBankAccount({
+      id: editing?.id ?? undefined,
+      bankLabel: values.bankLabel,
+      bankName: values.bankName || undefined,
+      bankCode: values.bankCode || undefined,
+      bankBranchCode: values.bankBranchCode || undefined,
+      bankAccountNumber: values.bankAccountNumber || undefined,
+      bankRibKey: values.bankRibKey || undefined,
+      bankBic: values.bankBic || undefined,
+      bankIban: values.bankIban || undefined,
+      bankDomiciliation: values.bankDomiciliation || undefined,
+      bankAccountHolder: values.bankAccountHolder || undefined,
+      bankOwnerAddress: values.bankOwnerAddress || undefined,
+      bankOwnerPostalCode: values.bankOwnerPostalCode || undefined,
+      bankOwnerCity: values.bankOwnerCity || undefined,
+    });
+    accountsQuery.refetch();
+    setIsModalOpen(false);
+    setEditing(null);
+  };
+
+  const handleDelete = async (account: RefBankAccount) => {
+    if (!window.confirm(`Désactiver le compte « ${account.bankLabel} » ?`)) return;
+    await crud.deleteBankAccount(account.id);
+    accountsQuery.refetch();
+  };
+
+  const handleSetDefault = async (account: RefBankAccount) => {
+    await crud.saveBankAccount({ id: account.id, bankLabel: account.bankLabel, isDefault: true });
+    accountsQuery.refetch();
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-end mb-4">
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => { setEditing(null); setIsModalOpen(true); }}
+          className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
+          style={{ backgroundColor: currentTheme.colors.primary }}
+        >
+          <Plus className="w-5 h-5" />
+          <span>Ajouter un compte bancaire</span>
+        </motion.button>
+      </div>
+
+      <div className="space-y-4">
+        {accountsQuery.data.map((account) => (
+          <motion.div
+            key={account.id}
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            className="rounded-xl p-6 border shadow-sm"
+            style={{ backgroundColor: currentTheme.colors.surface, borderColor: currentTheme.colors.border }}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold" style={{ color: currentTheme.colors.text }}>{account.bankLabel}</h3>
+                  {account.isDefault && (
+                    <span
+                      className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                      style={{ backgroundColor: currentTheme.colors.primaryLight, color: currentTheme.colors.primary }}
+                    >
+                      Compte par défaut
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>{account.bankName}</p>
+              </div>
+              <div className="flex gap-2">
+                {!account.isDefault && (
+                  <button
+                    onClick={() => handleSetDefault(account)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium border"
+                    style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }}
+                  >
+                    Définir par défaut
+                  </button>
+                )}
+                <button
+                  onClick={() => { setEditing(account); setIsModalOpen(true); }}
+                  className="p-1.5 rounded-lg text-white"
+                  style={{ backgroundColor: currentTheme.colors.secondary }}
+                  title="Modifier"
+                >
+                  <Edit className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => handleDelete(account)}
+                  className="p-1.5 rounded-lg text-white"
+                  style={{ backgroundColor: currentTheme.colors.error }}
+                  title="Désactiver"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-3 border-t text-sm" style={{ borderColor: currentTheme.colors.border, color: currentTheme.colors.text }}>
+              <div><span style={{ color: currentTheme.colors.textLight }}>IBAN : </span>{account.bankIban || "—"}</div>
+              <div><span style={{ color: currentTheme.colors.textLight }}>BIC : </span>{account.bankBic || "—"}</div>
+              <div><span style={{ color: currentTheme.colors.textLight }}>Titulaire : </span>{account.bankAccountHolder || "—"}</div>
+            </div>
+          </motion.div>
+        ))}
+        {accountsQuery.data.length === 0 && (
+          <div
+            className="p-8 text-center text-sm rounded-xl border"
+            style={{ color: currentTheme.colors.textLight, borderColor: currentTheme.colors.border, backgroundColor: currentTheme.colors.surface }}
+          >
+            Aucun compte bancaire pour cette entité.
+          </div>
+        )}
+      </div>
+
+      <ReferentielFormModal
+        isOpen={isModalOpen}
+        onClose={() => { setIsModalOpen(false); setEditing(null); }}
+        onSave={handleSave}
+        title={editing ? "Modifier le compte bancaire" : "Ajouter un compte bancaire"}
+        fields={bankAccountFields}
+        initialValues={editing ?? {}}
       />
     </div>
   );

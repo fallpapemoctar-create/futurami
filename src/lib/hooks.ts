@@ -153,12 +153,20 @@ export interface RawContact {
   lastname: string
   email: string
   phone: string
+  phone_perso: string
   phone_mobile: string
+  fax: string
+  birthday: string
   position: string
   address: string
   zip: string
   town: string
+  fk_pays: number
   country_label: string
+  fk_departement: number
+  department_label: string
+  note_public: string
+  note_private: string
   status: number
 }
 
@@ -171,6 +179,24 @@ export function useContacts(clientId: number | null) {
       return res.data?.contacts ?? []
     },
     [clientId ?? 0]
+  )
+}
+
+// Vue transverse "Contacts" (toutes sociétés confondues) — utilisée par l'onglet
+// Contacts de TiersPage. Distincte de useContacts(clientId) qui reste dédiée à la
+// fiche détail d'une société (get_contacts.php exige un client_id).
+export interface RawAllContact extends RawContact {
+  company_name: string
+}
+
+export function useAllContacts(q?: string) {
+  return useFetch<RawAllContact[]>(
+    [],
+    async () => {
+      const res = await api.get('get_all_contacts.php', { params: { q, limit: 5000 } })
+      return res.data?.contacts ?? []
+    },
+    [q ?? '']
   )
 }
 
@@ -198,6 +224,11 @@ export interface RawMission {
   client_address: string
   client_zip: string
   client_town: string
+  // Personne demandeuse (contact rattaché au tiers via llx_socpeople.fk_soc)
+  prenom_demandeur: string | null
+  nom_demandeur: string | null
+  phone: string | null
+  phone_mobile: string | null
   billed_status: string | null
   client_billed_status: string | null
   client_billed_status_label: string | null
@@ -287,6 +318,8 @@ export interface RawInvoiceDraft {
   month: string
   total_ht: number
   status: string
+  payment_condition_id: number | null
+  bank_account_id: number | null
   created_at: string
   updated_at: string
 }
@@ -392,6 +425,108 @@ export function useUsers() {
   )
 }
 
+// ─── Référentiels (langues, pays, départements, conditions paiement, comptes bancaires) ─
+
+export interface RefLanguage {
+  id: number | null
+  ref: string
+  label: string
+  display_name: string
+  price?: number | null
+  price_ttc?: number | null
+  tva_tx?: number | null
+}
+
+export function useLanguages(q?: string) {
+  return useFetch<RefLanguage[]>(
+    [],
+    async () => {
+      const res = await api.get('get_languages.php', { params: { q, limit: 10000 } })
+      return res.data?.languages ?? []
+    },
+    [q ?? '']
+  )
+}
+
+export interface RefCountry {
+  id: number
+  label: string
+  code: string
+  code_iso: string
+}
+
+export function useCountries() {
+  return useFetch<RefCountry[]>(
+    [],
+    async () => {
+      const res = await api.get('get_countries.php')
+      return Array.isArray(res.data) ? res.data : []
+    }
+  )
+}
+
+export interface RefDepartment {
+  id: number
+  label: string
+  code: string
+}
+
+export function useDepartments() {
+  return useFetch<RefDepartment[]>(
+    [],
+    async () => {
+      const res = await api.get('get_departments.php')
+      return Array.isArray(res.data) ? res.data : []
+    }
+  )
+}
+
+export interface RefPaymentTerm {
+  id: number
+  code: string
+  label: string
+  days: number
+  shift: number
+  isDefault: boolean
+}
+
+export function usePaymentTerms(clientId?: number | null) {
+  return useFetch<{ terms: RefPaymentTerm[]; defaultId: number }>(
+    { terms: [], defaultId: 0 },
+    async () => {
+      const res = await api.get('get_client_payment_terms.php', {
+        params: { client_id: clientId ?? 0 },
+      })
+      return {
+        terms: res.data?.paymentTerms ?? [],
+        defaultId: res.data?.defaultTermId ?? 0,
+      }
+    },
+    [clientId ?? 0]
+  )
+}
+
+export interface RefBankAccount {
+  id: number
+  isDefault: boolean
+  bankLabel: string
+  bankName: string
+  bankIban: string
+  bankBic: string
+  bankAccountHolder: string
+  bankDomiciliation: string
+}
+
+export function useBankAccounts() {
+  return useFetch<RefBankAccount[]>(
+    [],
+    async () => {
+      const res = await api.get('get_company_bank_accounts.php')
+      return res.data?.bankAccounts ?? []
+    }
+  )
+}
+
 // ─── Actions CRUD ────────────────────────────────────────────────────────────
 
 export const crud = {
@@ -444,12 +579,24 @@ export const crud = {
   saveContact: (data: {
     id?: string | number
     client_id: number
+    civility?: string
     firstname?: string
     lastname: string
     email?: string
     phone?: string
+    personal_phone?: string
     mobile?: string
+    fax?: string
     position?: string
+    birthday?: string
+    address?: string
+    zip?: string
+    town?: string
+    country_id?: number | string
+    department_id?: number | string
+    note_public?: string
+    note_private?: string
+    is_active?: 0 | 1
   }) => {
     const endpoint = data.id ? 'update_contact.php' : 'add_contact.php'
     return api.post(endpoint, data).then((r) => r.data)
@@ -497,6 +644,21 @@ export const crud = {
   }) => api.post('update_quote.php', data).then((r) => r.data),
   createQuoteFromMission: (mission_id: number, user_id?: number) =>
     api.post('create_quote_from_mission.php', { mission_id, user_id }).then((r) => r.data),
+  // Création manuelle d'un devis (sans mission source) — appelée depuis la page
+  // Devis, bouton « Nouveau devis ». mission_id = NULL côté BDD.
+  createQuoteManual: (data: {
+    client_id: number
+    date_valid_until?: string
+    month?: string
+    notes?: string
+    lines: Array<{
+      description: string
+      quantity: number
+      unit_price: number
+      tva_rate?: number
+      discount?: number
+    }>
+  }) => api.post('add_quote.php', data).then((r) => r.data),
   convertQuoteToInvoice: (quote_id: number, opts: { user_id?: number; payment_condition_id?: number; bank_account_id?: number } = {}) =>
     api.post('convert_quote_to_invoice.php', { quote_id, ...opts }).then((r) => r.data),
 
@@ -510,9 +672,135 @@ export const crud = {
     payment_condition_id?: number
     bank_account_id?: number
   }) => api.post('save_invoice_draft.php', data).then((r) => r.data),
+  saveInvoiceDraftLines: (data: {
+    draft_id?: number
+    draft_key?: string
+    client_name: string
+    period_month: string // "YYYY-MM-DD" (1er du mois) ou "YYYY-MM"
+    user_id?: number
+    user_name?: string
+    lines: Array<{
+      mission_id?: number
+      mission_ref?: string
+      designation: string
+      quantity: number
+      unit_price_ht: number
+      total_ht?: number
+      tva_rate?: number
+      discount?: number
+      notes?: string
+      sort_order?: number
+    }>
+  }) => api.post('save_invoice_draft_lines.php', data).then((r) => r.data),
   deleteInvoiceDraft: (draft_id: number) =>
     api.post('delete_invoice_draft.php', { draft_id }).then((r) => r.data),
 
+  // ─── Émission facture atomique (Phase 3) ────────────────────────────────
+  /**
+   * Ouvre l'aperçu PDF d'un brouillon de facture dans un nouvel onglet.
+   *
+   * NB : l'endpoint `preview_invoice_pdf.php` est protégé par JWT
+   * (Authorization: Bearer …). Une simple `window.open(url)` ne peut PAS
+   * envoyer d'en-tête personnalisé → réponse `missing_token`. On récupère
+   * donc le PDF via axios (qui joint automatiquement le Bearer), puis on
+   * l'affiche depuis un `blob:` URL local. Bonus : le token n'apparaît
+   * jamais dans l'historique du navigateur ni les logs serveur.
+   */
+  previewInvoicePdf: async (draft_id: number): Promise<void> => {
+    const res = await api.get('preview_invoice_pdf.php', {
+      params: { draft_id },
+      responseType: 'blob',
+    })
+    const blob = new Blob([res.data], { type: 'application/pdf' })
+    const url = URL.createObjectURL(blob)
+    const win = window.open(url, '_blank', 'noopener,noreferrer')
+    // Le popup peut être bloqué : on tente un lien invisible en fallback.
+    if (!win) {
+      const a = document.createElement('a')
+      a.href = url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    }
+    // Libération mémoire une fois le nouvel onglet chargé (60 s).
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  },
+
+  /**
+   * Émet la facture définitive à partir d'un brouillon. Côté serveur :
+   * réservation atomique du N°, génération PDF, INSERT en BDD et suppression
+   * du brouillon dans une SEULE transaction PDO. Impossible d'obtenir deux
+   * factures au même N° même en cas d'appels concurrents.
+   */
+  emitInvoice: (data: {
+    draft_id: number
+    user_id?: number
+    user_name?: string
+    notes?: string
+    status?: 'draft' | 'validated' | 'sent'
+  }) => api.post('emit_invoice.php', data).then((r) => r.data as {
+    success: boolean
+    invoice_number: string
+    pdf_path: string
+    pdf_filename: string
+    pdf_size: number
+    total_ht: number
+    status_code: string
+    status_label: string
+  }),
+
+  // Statuts de facturation client
+  updateClientInvoiceStatus: (data: {
+    invoice_number: string
+    status: string
+    status_label?: string
+    user_id?: number
+    user_name?: string
+  }) => api.post('update_client_invoice_status.php', data).then((r) => r.data),
+
+  updateInvoiceDate: (data: { invoice_number: string; invoice_date: string }) =>
+    api.post('update_invoice_date.php', data).then((r) => r.data),
+
+  updateInvoiceBankAccount: (data: { invoice_number: string; bank_account_id: number }) =>
+    api.post('update_invoice_bank_account.php', data).then((r) => r.data),
+
+  updateInvoicePaymentTerm: (data: { invoice_number: string; payment_condition_id: number }) =>
+    api.post('update_invoice_payment_term.php', data).then((r) => r.data),
+
+  // Avoirs (credit notes)
+  createCreditNote: (data: {
+    source_invoice_number: string
+    mode: 'total' | 'partial'
+    reason: string
+    lines?: Array<{ source_line_id: number; quantity: number; unit_price_ht: number }>
+    user_id?: number
+    user_name?: string
+    billed_at?: string
+  }) => api.post('create_credit_note.php', data).then((r) => r.data),
+
+  applyCreditNote: (data: {
+    invoice_number: string
+    credit_note_invoice_number: string
+    amount?: number
+    user_id?: number
+    user_name?: string
+  }) => api.post('apply_credit_note.php', data).then((r) => r.data),
+
+  getAvailableCreditNotes: (clientId: number) =>
+    api.get('get_available_credit_notes.php', { params: { client_id: clientId } }).then((r) => r.data),
+
+  // Envoi email facture (stub serveur)
+  sendInvoiceEmail: (data: {
+    invoice_number: string
+    to: string[]
+    cc?: string[]
+    subject?: string
+    body?: string
+    user_id?: number
+    user_name?: string
+  }) => api.post('send_invoice_email.php', data).then((r) => r.data),
   // Utilisateurs
   saveUser: (data: {
     id?: string | number
@@ -530,5 +818,61 @@ export const crud = {
   },
   deleteUser: (id: string | number) =>
     api.post('admin/delete_user.php', { id }).then((r) => r.data),
+
+  // Référentiels — Langues / prestations (llx_product, scopées par entité)
+  saveLanguage: (data: {
+    id?: string | number
+    ref?: string
+    label: string
+    price?: number
+    price_ttc?: number
+    tva_tx?: number
+    fk_product_type?: number
+  }) => {
+    const endpoint = data.id ? 'update_language.php' : 'add_language.php'
+    return api.post(endpoint, data).then((r) => r.data)
+  },
+  deleteLanguage: (id: string | number) =>
+    api.post('delete_language.php', { id }).then((r) => r.data),
+
+  // Référentiels — Termes de paiement (llx_c_payment_term, scopés par entité)
+  savePaymentTerm: (data: {
+    id?: string | number
+    code?: string
+    label: string
+    label_facture?: string
+    days?: number
+    shift?: number
+    active?: boolean
+  }) => {
+    const endpoint = data.id ? 'update_payment_term.php' : 'add_payment_term.php'
+    return api.post(endpoint, data).then((r) => r.data)
+  },
+  deletePaymentTerm: (id: string | number) =>
+    api.post('delete_payment_term.php', { id }).then((r) => r.data),
+
+  // Référentiels — Comptes bancaires (llx_bank_account, scopés par entité, pas de duplication)
+  saveBankAccount: (data: {
+    id?: string | number
+    bankLabel: string
+    bankName?: string
+    bankCode?: string
+    bankBranchCode?: string
+    bankAccountNumber?: string
+    bankRibKey?: string
+    bankBic?: string
+    bankIban?: string
+    bankDomiciliation?: string
+    bankAccountHolder?: string
+    bankOwnerAddress?: string
+    bankOwnerPostalCode?: string
+    bankOwnerCity?: string
+    isDefault?: boolean
+  }) => {
+    const endpoint = data.id ? 'update_bank_account.php' : 'add_bank_account.php'
+    return api.post(endpoint, data).then((r) => r.data)
+  },
+  deleteBankAccount: (id: string | number) =>
+    api.post('delete_bank_account.php', { id }).then((r) => r.data),
 }
 

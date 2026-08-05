@@ -37,8 +37,8 @@ La configuration d'environnement est définie dans `assets/config/app_config*.js
 
 | Environnement | apiBaseUrl Flutter | Base MySQL |
 |---|---|---|
-| Dev local | `http://localhost/gesplanet_01/ami/api/` | `localhost` / `dbs12436960` / `root` |
-| Production | `https://ami.planetapplis.fr/api/` | `db5014964228.hosting-data.io` / `dbs12436960` / `dbu1316150` |
+| Dev local | `http://localhost/gesplanet_01/ami/api/` | `localhost` / `dbs13098267` / `root` |
+| Production | `https://ami.planetapplis.fr/api/` | `db5014964228.hosting-data.io` / `dbs13098267` / `dbu1316150` |
 
 Le choix de la base se fait par variable d'environnement `APP_ENV=prod|local` ou par heuristique d'hôte (`yourbizapps.com`, `planetapplis.fr` ⇒ prod).
 
@@ -512,7 +512,7 @@ Recommandé : rediriger `api/*.log` vers un agrégateur (ELK, Loki) en productio
 ### 16.1 Prérequis
 - Flutter SDK ≥ 3.10 (Dart SDK fourni)
 - WAMP (ou XAMPP/MAMP) avec Apache + PHP 8.0+ + MySQL 5.7+/MariaDB 10.4+
-- Une base MySQL `dbs12436960` peuplée du schéma Dolibarr `llx_*` + extensions `tble_*` + `invoice_draft*`
+- Une base MySQL `dbs13098267` peuplée du schéma Dolibarr `llx_*` + extensions `tble_*` + `invoice_draft*`
 
 ### 16.2 Première utilisation
 ```bash

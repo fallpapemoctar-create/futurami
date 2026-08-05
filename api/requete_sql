@@ -1,0 +1,4 @@
+ALTER TABLE llx_user ADD COLUMN interp_langues VARCHAR(255) NULL AFTER office_phone, ADD COLUMN interp_commentaires VARCHAR(255) NULL AFTER interp_langues;
+ALTER TABLE llx_user ADD COLUMN selectdispo VARCHAR(50) NULL AFTER interp_commentaires;
+ALTER TABLE llx_user MODIFY user_mobile VARCHAR(50);
+UPDATE llx_user u JOIN tble_annuaire_interpretes i ON LOWER(REPLACE(u.lastname, ' ', '')) = LOWER(REPLACE(i.Nom, ' ', '')) AND LOWER(REPLACE(u.firstname, ' ', '')) = LOWER(REPLACE(i.Prenom, ' ', '')) SET u.user_mobile = i.Tel_Mobile, u.office_phone = i.Numero, u.interp_langues = i.Langues_parlees, u.interp_commentaires = i.Commentaires, u.selectdispo = i.selectdispo, u.email = i.Email;

@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { Save, X } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
 import { Modal } from "./Modal";
+import { useCountries, useDepartments } from "../../lib/hooks";
 
 interface Company {
   id: string;
@@ -31,34 +32,38 @@ interface EditCompanyModalProps {
   onSave: (company: Company) => void;
 }
 
+const EMPTY_COMPANY: Company = {
+  id: "",
+  name: "",
+  code: "",
+  country: "France",
+  phone: "",
+  email: "",
+  address: "",
+  addressLine2: "",
+  postalCode: "",
+  city: "",
+  department: "",
+  fax: "",
+  siret: "",
+  siren: "",
+  website: "",
+  publicNote: "",
+  privateNote: "",
+};
+
 export function EditCompanyModal({ isOpen, onClose, company, onSave }: EditCompanyModalProps) {
   const { currentTheme } = useTheme();
-  const [formData, setFormData] = useState<Company>({
-    id: "",
-    name: "",
-    code: "",
-    country: "France",
-    phone: "",
-    email: "",
-    address: "",
-    addressLine2: "",
-    postalCode: "",
-    city: "",
-    department: "",
-    fax: "",
-    siret: "",
-    siren: "",
-    website: "",
-    publicNote: "",
-    privateNote: "",
-  });
+  const isCreating = !company;
+  const [formData, setFormData] = useState<Company>(EMPTY_COMPANY);
+  const { data: countries, loading: countriesLoading } = useCountries();
+  const { data: departments, loading: departmentsLoading } = useDepartments();
 
-  // Mettre à jour les données du formulaire quand la société change
   useEffect(() => {
-    if (company) {
-      setFormData(company);
+    if (isOpen) {
+      setFormData(company ?? EMPTY_COMPANY);
     }
-  }, [company]);
+  }, [isOpen, company]);
 
   const handleChange = (field: keyof Company, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -70,10 +75,8 @@ export function EditCompanyModal({ isOpen, onClose, company, onSave }: EditCompa
     onClose();
   };
 
-  if (!company) return null;
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Modifier la société" size="xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={isCreating ? "Nouvelle société" : "Modifier la société"} size="xl">
       <form onSubmit={handleSubmit}>
         <div className="space-y-6">
           {/* Informations générales */}
@@ -119,8 +122,7 @@ export function EditCompanyModal({ isOpen, onClose, company, onSave }: EditCompa
                 <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                   Pays *
                 </label>
-                <input
-                  type="text"
+                <select
                   value={formData.country}
                   onChange={(e) => handleChange("country", e.target.value)}
                   required
@@ -129,15 +131,22 @@ export function EditCompanyModal({ isOpen, onClose, company, onSave }: EditCompa
                     borderColor: currentTheme.colors.border,
                     color: currentTheme.colors.text,
                   }}
-                />
+                >
+                  {countriesLoading && <option value="">Chargement…</option>}
+                  {!countriesLoading && countries.length === 0 && (
+                    <option value={formData.country}>{formData.country || "—"}</option>
+                  )}
+                  {countries.map((c) => (
+                    <option key={c.id} value={c.label}>{c.label}</option>
+                  ))}
+                </select>
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                   Département
                 </label>
-                <input
-                  type="text"
+                <select
                   value={formData.department || ""}
                   onChange={(e) => handleChange("department", e.target.value)}
                   className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2"
@@ -145,7 +154,15 @@ export function EditCompanyModal({ isOpen, onClose, company, onSave }: EditCompa
                     borderColor: currentTheme.colors.border,
                     color: currentTheme.colors.text,
                   }}
-                />
+                >
+                  <option value="">— Aucun —</option>
+                  {departmentsLoading && <option value="">Chargement…</option>}
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.label}>
+                      {d.code ? `${d.code} — ${d.label}` : d.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>

@@ -20,3 +20,19 @@ Thumbs.db
 *.log
 npm-debug.log*
 pnpm-debug.log*
+node_modules
+
+# Secrets backend (AUTH_SECRET, credentials DB) — ne jamais committer
+api/.htaccess
+api/.env.local.php
+!api/.env.local.php.example
+
+# Fichiers uploadés par les utilisateurs (logos, etc.) — pas de code source
+api/uploads/
+
+# Composer — vendor/ commité pour déploiement FTP (pas d'accès SSH sur l'hébergement)
+# composer.phar reste local mais pas commité (installé à la demande via composer.json)
+api/composer.phar
+# Cache et fichiers temporaires de mPDF (regénérés à la volée)
+api/vendor/mpdf/mpdf/tmp/*
+!api/vendor/mpdf/mpdf/tmp/.gitignore

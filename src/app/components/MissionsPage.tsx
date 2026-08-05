@@ -1,14 +1,19 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, FileText, Calendar, Clock, User, Building, Languages, Edit, Trash2, Eye, ChevronRight, Search, Filter, Download, X, ChevronLeft, FileSpreadsheet, TrendingUp, BarChart3 } from "lucide-react";
+import { Plus, FileText, Calendar, Clock, User, Building, Languages, Edit, Trash2, Eye, ChevronRight, Search, Filter, Download, X, ChevronLeft, FileSpreadsheet, TrendingUp, BarChart3, CheckCircle2, AlertCircle } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
 import { StatusChip } from "./StatusChip";
 import { EmptyState } from "./EmptyState";
 import { ViewModeSelector, ViewMode } from "./ViewModeSelector";
 import { EditMissionModal } from "./EditMissionModal";
+import { EditInterpreterModal } from "./EditInterpreterModal";
+import { EditCompanyModal } from "./EditCompanyModal";
+import { EditContactModal, type ContactFormData } from "./EditContactModal";
+import { AutocompleteSelect } from "./AutocompleteSelect";
+import { ReferentielFormModal, type ReferentielField } from "./ReferentielFormModal";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { api } from "../../lib/api";
-import { crud, type RawMission } from "../../lib/hooks";
+import { crud, type RawMission, useInterpreters, useClients, useLanguages, useContacts } from "../../lib/hooks";
 
 interface Mission {
   id: string;
@@ -20,6 +25,9 @@ interface Mission {
   interpreter: string;
   language: string;
   client: string;
+  clientId?: number | null;
+  contact: string;
+  contactId?: number | null;
   location: string;
   status: "Brouillon" | "Validée" | "Terminée" | "Annulée";
 }
@@ -31,6 +39,7 @@ function mapApiMission(raw: RawMission): Mission {
   const dateStr = d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("fr-FR") : (iso || "");
   const time = (raw.heuredebutmission || "").slice(0, 5);
   const statusMap: Record<number, Mission["status"]> = { 0: "Brouillon", 1: "Validée", 2: "Terminée", 3: "Annulée" };
+  const contact = [raw.nom_demandeur, raw.prenom_demandeur].filter(Boolean).join(" ").trim();
   return {
     id: `mission-${raw.rowid}`,
     ref: raw.reference_devis || raw.label || `PRO${String(raw.rowid).padStart(6, "0")}`,
@@ -41,6 +50,9 @@ function mapApiMission(raw: RawMission): Mission {
     interpreter: raw.interpreter_name || [raw.firstname, raw.lastname].filter(Boolean).join(" ") || "—",
     language: raw.produit_ref || "",
     client: raw.client_name || "",
+    clientId: raw.client_id || null,
+    contact,
+    contactId: raw.contact_id && raw.contact_id > 0 ? raw.contact_id : null,
     location: raw.client_town || "",
     status: statusMap[raw.mission_status] || "Brouillon",
   };
@@ -54,6 +66,62 @@ export function MissionsPage() {
   const [showStats, setShowStats] = useState(false);
   const [editingMission, setEditingMission] = useState<Mission | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+
+  // Message de succès (création / mise à jour / suppression de mission)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const successTimerRef = useRef<number | null>(null);
+  const showSuccess = (msg: string) => {
+    setSuccessMessage(msg);
+    setErrorMessage(null); // masque un éventuel toast d'erreur précédent
+    if (successTimerRef.current !== null) {
+      window.clearTimeout(successTimerRef.current);
+    }
+    successTimerRef.current = window.setTimeout(() => {
+      setSuccessMessage(null);
+      successTimerRef.current = null;
+    }, 5000);
+  };
+
+  // Message d'échec (création / mise à jour / suppression de mission)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const errorTimerRef = useRef<number | null>(null);
+  const showError = (msg: string) => {
+    setErrorMessage(msg);
+    setSuccessMessage(null); // masque un éventuel toast de succès précédent
+    if (errorTimerRef.current !== null) {
+      window.clearTimeout(errorTimerRef.current);
+    }
+    // On laisse plus longtemps que le succès : l'utilisateur doit pouvoir lire le motif
+    errorTimerRef.current = window.setTimeout(() => {
+      setErrorMessage(null);
+      errorTimerRef.current = null;
+    }, 8000);
+  };
+
+  // Extrait un message lisible d'une exception Axios/générique.
+  const extractErrorMessage = (e: unknown, fallback: string): string => {
+    const err = e as {
+      response?: { data?: { error?: string; message?: string } };
+      message?: string;
+    };
+    return (
+      err?.response?.data?.error ||
+      err?.response?.data?.message ||
+      err?.message ||
+      fallback
+    );
+  };
+
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current !== null) {
+        window.clearTimeout(successTimerRef.current);
+      }
+      if (errorTimerRef.current !== null) {
+        window.clearTimeout(errorTimerRef.current);
+      }
+    };
+  }, []);
 
   // Filtres
   const [searchQuery, setSearchQuery] = useState("");
@@ -105,10 +173,21 @@ export function MissionsPage() {
         dureemission: updatedMission.duration?.replace(/[^0-9]/g, "") || undefined,
         mission_status: statusMap[updatedMission.status],
         commentaires: updatedMission.location,
+        contact_id:
+          typeof updatedMission.contactId === "number" && updatedMission.contactId > 0
+            ? updatedMission.contactId
+            : 0,
       });
       reloadMissions();
+      showSuccess(`Mission « ${updatedMission.ref} » mise à jour.`);
     } catch (e) {
       console.error("Sauvegarde mission impossible", e);
+      showError(
+        extractErrorMessage(
+          e,
+          `Échec de la mise à jour de la mission « ${updatedMission.ref} ».`
+        )
+      );
     }
   };
 
@@ -119,8 +198,32 @@ export function MissionsPage() {
     try {
       await crud.deleteMission(numericId);
       reloadMissions();
+      showSuccess(`Mission « ${mission.ref} » supprimée.`);
     } catch (e) {
       console.error("Suppression mission impossible", e);
+      showError(
+        extractErrorMessage(
+          e,
+          `Échec de la suppression de la mission « ${mission.ref} ».`
+        )
+      );
+    }
+  };
+
+  const handleCreateQuoteFromMission = async (mission: Mission) => {
+    const numericId = Number(String(mission.id).replace(/^mission-/, ""));
+    if (!numericId) return;
+    try {
+      const res = await crud.createQuoteFromMission(numericId);
+      showSuccess(
+        `Devis créé à partir de la mission ${mission.ref}` +
+          (res?.quote_id ? ` (ID ${res.quote_id})` : "")
+      );
+    } catch (e) {
+      console.error("Génération de devis impossible", e);
+      showError(
+        extractErrorMessage(e, `Génération de devis impossible pour « ${mission.ref} ».`)
+      );
     }
   };
 
@@ -299,11 +402,89 @@ export function MissionsPage() {
   ].filter(Boolean).length;
 
   if (view === "create") {
-    return <CreateMissionForm onBack={() => setView("list")} />;
+    return (
+      <CreateMissionForm
+        onBack={() => setView("list")}
+        onCreated={(info) => {
+          reloadMissions();
+          setView("list");
+          showSuccess(
+            info?.ref
+              ? `Mission « ${info.ref} » créée avec succès.`
+              : "Mission créée avec succès."
+          );
+        }}
+        onError={(msg) => showError(msg)}
+      />
+    );
   }
 
   return (
     <div className="max-w-[1800px] mx-auto px-8 py-6">
+      {/* Toast succès (création / mise à jour / suppression de mission) */}
+      <AnimatePresence>
+        {successMessage && (
+          <motion.div
+            key="mission-success-toast"
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.2 }}
+            role="status"
+            aria-live="polite"
+            className="fixed top-24 right-8 z-50 flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg max-w-md"
+            style={{
+              backgroundColor: "#F0FDF4",
+              borderColor: "#BBF7D0",
+              color: "#166534",
+            }}
+          >
+            <CheckCircle2 className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: "#16A34A" }} />
+            <div className="flex-1 text-sm font-medium leading-snug">{successMessage}</div>
+            <button
+              type="button"
+              onClick={() => setSuccessMessage(null)}
+              className="text-green-700/70 hover:text-green-900"
+              aria-label="Fermer la notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast d'échec (création / mise à jour / suppression de mission) */}
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div
+            key="mission-error-toast"
+            initial={{ opacity: 0, y: -12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.2 }}
+            role="alert"
+            aria-live="assertive"
+            className="fixed top-24 right-8 z-50 flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg max-w-md"
+            style={{
+              backgroundColor: "#FEF2F2",
+              borderColor: "#FECACA",
+              color: "#991B1B",
+            }}
+          >
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: "#DC2626" }} />
+            <div className="flex-1 text-sm font-medium leading-snug">{errorMessage}</div>
+            <button
+              type="button"
+              onClick={() => setErrorMessage(null)}
+              className="text-red-700/70 hover:text-red-900"
+              aria-label="Fermer la notification d'erreur"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold mb-1" style={{ color: currentTheme.colors.text }}>
@@ -789,11 +970,11 @@ export function MissionsPage() {
       {viewMode === "cards" ? (
         <div className="space-y-4">
           {paginatedMissions.map((mission, index) => (
-            <MissionCard key={mission.id} mission={mission} index={index} onEdit={handleEditMission} />
+            <MissionCard key={mission.id} mission={mission} index={index} onEdit={handleEditMission} onDelete={handleDeleteMission} onCreateQuote={handleCreateQuoteFromMission} />
           ))}
         </div>
       ) : (
-        <MissionsTable missions={paginatedMissions} />
+        <MissionsTable missions={paginatedMissions} onEdit={handleEditMission} onDelete={handleDeleteMission} onCreateQuote={handleCreateQuoteFromMission} />
       )}
 
       {filteredMissions.length === 0 && (
@@ -868,7 +1049,7 @@ export function MissionsPage() {
   );
 }
 
-function MissionsTable({ missions }: { missions: Mission[] }) {
+function MissionsTable({ missions, onEdit, onDelete, onCreateQuote }: { missions: Mission[]; onEdit: (mission: Mission) => void; onDelete: (mission: Mission) => void; onCreateQuote: (mission: Mission) => void }) {
   const { currentTheme } = useTheme();
 
   return (
@@ -1013,14 +1194,14 @@ function MissionsTable({ missions }: { missions: Mission[] }) {
                       className="p-1.5 rounded-lg text-white"
                       style={{ backgroundColor: currentTheme.colors.success }}
                       title="Générer un devis"
-                      onClick={() => alert("Générer un devis pour cette mission")}
+                      onClick={() => onCreateQuote(mission)}
                     >
                       <FileText className="w-4 h-4" />
                     </motion.button>
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
-                      onClick={() => handleEditMission(mission)}
+                      onClick={() => onEdit(mission)}
                       className="p-1.5 rounded-lg text-white"
                       style={{ backgroundColor: currentTheme.colors.secondary }}
                       title="Modifier"
@@ -1030,6 +1211,7 @@ function MissionsTable({ missions }: { missions: Mission[] }) {
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
+                      onClick={() => onDelete(mission)}
                       className="p-1.5 rounded-lg text-white"
                       style={{ backgroundColor: currentTheme.colors.error }}
                       title="Supprimer"
@@ -1047,7 +1229,7 @@ function MissionsTable({ missions }: { missions: Mission[] }) {
   );
 }
 
-function MissionCard({ mission, index, onEdit }: { mission: Mission; index: number; onEdit: (mission: Mission) => void }) {
+function MissionCard({ mission, index, onEdit, onDelete, onCreateQuote }: { mission: Mission; index: number; onEdit: (mission: Mission) => void; onDelete: (mission: Mission) => void; onCreateQuote: (mission: Mission) => void }) {
   const { currentTheme } = useTheme();
 
   return (
@@ -1099,7 +1281,7 @@ function MissionCard({ mission, index, onEdit }: { mission: Mission; index: numb
             className="p-2 rounded-lg text-white"
             style={{ backgroundColor: currentTheme.colors.success }}
             title="Générer un devis"
-            onClick={() => alert("Générer un devis pour cette mission")}
+            onClick={() => onCreateQuote(mission)}
           >
             <FileText className="w-4 h-4" />
           </motion.button>
@@ -1116,6 +1298,7 @@ function MissionCard({ mission, index, onEdit }: { mission: Mission; index: numb
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
+            onClick={() => onDelete(mission)}
             className="p-2 rounded-lg text-white"
             style={{ backgroundColor: currentTheme.colors.error }}
             title="Supprimer"
@@ -1175,14 +1358,311 @@ function MissionCard({ mission, index, onEdit }: { mission: Mission; index: numb
             </p>
           </div>
         </div>
+
+        {mission.contact && (
+          <div className="flex items-center gap-2 lg:col-span-2">
+            <User className="w-4 h-4" style={{ color: currentTheme.colors.textLight }} />
+            <div>
+              <p className="text-xs" style={{ color: currentTheme.colors.textLight }}>Personne demandeuse</p>
+              <p className="text-sm font-medium" style={{ color: currentTheme.colors.text }}>
+                {mission.contact}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </motion.div>
   );
 }
 
-function CreateMissionForm({ onBack }: { onBack: () => void }) {
+// ─── Champs de la modale de création rapide de langue ─────────────────────
+// Identiques à ceux de AdminPage → onglet Langues (même formulaire).
+// Les autres modales (interprète / société / contact) réutilisent les modales
+// riches (EditInterpreterModal, EditCompanyModal, EditContactModal) importées
+// des pages « métier » pour offrir la même UX partout.
+const CREATE_LANGUAGE_FIELDS: ReferentielField[] = [
+  { key: "label", label: "Libellé", type: "text", required: true },
+  { key: "ref", label: "Référence", type: "text", placeholder: "Générée automatiquement si vide" },
+  { key: "price", label: "Prix HT", type: "number", step: "0.01" },
+  { key: "price_ttc", label: "Prix TTC", type: "number", step: "0.01" },
+  { key: "tva_tx", label: "TVA (%)", type: "number", step: "0.01" },
+];
+
+function CreateMissionForm({ onBack, onCreated, onError }: { onBack: () => void; onCreated?: (info?: { id?: number; ref?: string }) => void; onError?: (msg: string) => void }) {
   const { currentTheme } = useTheme();
   const [missionType, setMissionType] = useState("Interprétariat");
+
+  // Hooks référentiels — on garde `refetch` pour rafraîchir après création rapide.
+  const {
+    data: interpreters,
+    loading: interpretersLoading,
+    refetch: refetchInterpreters,
+  } = useInterpreters();
+  const {
+    data: clients,
+    loading: clientsLoading,
+    refetch: refetchClients,
+  } = useClients({ activeOnly: true });
+  const {
+    data: languages,
+    loading: languagesLoading,
+    refetch: refetchLanguages,
+  } = useLanguages();
+
+  // Sélections contrôlées (comboboxes strictes) — les 4 champs "listes" du formulaire.
+  const [selectedClient, setSelectedClient] = useState("");
+  const [selectedContact, setSelectedContact] = useState("");
+  const [selectedInterpreter, setSelectedInterpreter] = useState("");
+  const [selectedLanguage, setSelectedLanguage] = useState("");
+
+  // Autres champs saisis (contrôlés) — utilisés à la soumission.
+  const [label, setLabel] = useState("");
+  const [date, setDate] = useState(""); // yyyy-mm-dd
+  const [time, setTime] = useState(""); // HH:MM
+  const [duration, setDuration] = useState(""); // minutes
+  const [comments, setComments] = useState("");
+  const [missionStatusLabel, setMissionStatusLabel] = useState<"Brouillon" | "Validée">("Brouillon");
+
+  // UI d'appel API.
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // ID client dérivé du libellé sélectionné → pilote le chargement des contacts.
+  const selectedClientId = useMemo(() => {
+    const match = clients.find((c) => c.name === selectedClient);
+    return match?.id ?? null;
+  }, [clients, selectedClient]);
+
+  const {
+    data: contacts,
+    loading: contactsLoading,
+    refetch: refetchContacts,
+  } = useContacts(selectedClientId);
+
+  // Reset du contact sélectionné si le client change (le contact n'a plus de sens).
+  useEffect(() => {
+    setSelectedContact("");
+  }, [selectedClientId]);
+
+  // Options pour les comboboxes.
+  const interpreterOptions = useMemo(
+    () => interpreters.map((i) => ({ id: i.id, value: i.name, label: i.name })),
+    [interpreters]
+  );
+  const clientOptions = useMemo(
+    () =>
+      clients.map((c) => ({
+        id: c.id ?? c.name,
+        value: c.name,
+        label: c.name,
+      })),
+    [clients]
+  );
+  const contactOptions = useMemo(
+    () =>
+      contacts.map((c) => {
+        const name = [c.lastname, c.firstname].filter(Boolean).join(" ") || c.email || "—";
+        return { id: c.id ?? name, value: name, label: name };
+      }),
+    [contacts]
+  );
+  const languageOptions = useMemo(
+    () =>
+      languages.map((l) => {
+        const label = l.display_name || l.label || l.ref;
+        return { id: l.id ?? label, value: label, label };
+      }),
+    [languages]
+  );
+
+  // États des modales de création rapide.
+  const [isCreateInterpreterOpen, setIsCreateInterpreterOpen] = useState(false);
+  const [isCreateClientOpen, setIsCreateClientOpen] = useState(false);
+  const [isCreateContactOpen, setIsCreateContactOpen] = useState(false);
+  const [isCreateLanguageOpen, setIsCreateLanguageOpen] = useState(false);
+
+  // ─── Handlers de création rapide ────────────────────────────────────────
+  // Chaque handler réutilise la MÊME modale que celle du bouton « Ajouter »
+  // de la page métier correspondante (interprètes, tiers, contacts), afin
+  // d'offrir une UX cohérente. Après création : refetch de la liste et
+  // pré-sélection de la valeur nouvellement créée dans le combobox.
+  const handleCreateInterpreter = async (updated: any) => {
+    try {
+      // Même adaptation que App.tsx.handleSaveInterpreter : le champ "name"
+      // affiché est décomposé (firstname = 1er token, lastname = le reste).
+      const [firstname = "", ...rest] = (updated.name || "").split(" ");
+      const lastname = rest.join(" ") || firstname;
+      await crud.saveInterpreter({
+        firstname,
+        lastname,
+        email: updated.email || undefined,
+        tel_mobile: updated.phone || undefined,
+        langues_parlees: updated.languages || undefined,
+        commentaires: updated.billing || undefined,
+        status: updated.status,
+      });
+      await refetchInterpreters();
+      setSelectedInterpreter(updated.name);
+      setIsCreateInterpreterOpen(false);
+    } catch (e) {
+      console.error("Création interprète impossible", e);
+      alert("Création de l'interprète impossible. Voir la console.");
+    }
+  };
+
+  const handleCreateClient = async (updated: any) => {
+    try {
+      await crud.saveClient({
+        name: updated.name,
+        alias: updated.code || undefined,
+        address: updated.address || undefined,
+        zip: updated.postalCode || undefined,
+        town: updated.city || undefined,
+        phone: updated.phone || undefined,
+        fax: updated.fax || undefined,
+        email: updated.email || undefined,
+        website: updated.website || undefined,
+        siren: updated.siren || undefined,
+        siret: updated.siret || undefined,
+        note_public: updated.publicNote || undefined,
+        note_private: updated.privateNote || undefined,
+      });
+      await refetchClients();
+      setSelectedClient(updated.name);
+      setIsCreateClientOpen(false);
+    } catch (e) {
+      console.error("Création société impossible", e);
+      alert("Création de la société impossible. Voir la console.");
+    }
+  };
+
+  const handleCreateContact = async (data: ContactFormData) => {
+    if (!selectedClientId) {
+      alert("Veuillez d'abord sélectionner une société.");
+      return;
+    }
+    try {
+      // fk_soc = selectedClientId → le contact appartient bien à la société sélectionnée.
+      await crud.saveContact({
+        client_id: selectedClientId,
+        civility: data.civility || undefined,
+        firstname: data.firstname || undefined,
+        lastname: data.lastname,
+        position: data.position || undefined,
+        email: data.email || undefined,
+        phone: data.phone || undefined,
+        personal_phone: data.personalPhone || undefined,
+        mobile: data.mobile || undefined,
+        fax: data.fax || undefined,
+        birthday: data.birthday || undefined,
+        address: data.address || undefined,
+        zip: data.postalCode || undefined,
+        town: data.city || undefined,
+        country_id: data.countryId ? Number(data.countryId) : undefined,
+        department_id: data.departmentId ? Number(data.departmentId) : undefined,
+        note_public: data.publicNote || undefined,
+        note_private: data.privateNote || undefined,
+        is_active: data.isActive ? 1 : 0,
+      });
+      await refetchContacts();
+      const displayName = [data.lastname, data.firstname].filter(Boolean).join(" ");
+      setSelectedContact(displayName);
+      setIsCreateContactOpen(false);
+    } catch (e) {
+      console.error("Création contact impossible", e);
+      alert("Création du contact impossible. Voir la console.");
+    }
+  };
+
+  const handleCreateLanguage = async (values: Record<string, any>) => {
+    try {
+      await crud.saveLanguage({
+        label: values.label,
+        ref: values.ref || undefined,
+        price: values.price !== "" && values.price != null ? Number(values.price) : undefined,
+        price_ttc: values.price_ttc !== "" && values.price_ttc != null ? Number(values.price_ttc) : undefined,
+        tva_tx: values.tva_tx !== "" && values.tva_tx != null ? Number(values.tva_tx) : undefined,
+      });
+      await refetchLanguages();
+      setSelectedLanguage(values.label);
+      setIsCreateLanguageOpen(false);
+    } catch (e) {
+      console.error("Création langue impossible", e);
+      alert("Création de la langue impossible. Voir la console.");
+    }
+  };
+
+  // ─── Soumission finale du formulaire mission ───────────────────────────
+  // Résout les IDs (interprète, client, contact, langue) depuis les libellés
+  // sélectionnés puis appelle crud.saveMission (POST add_mission_interpreter.php).
+  const handleCreateMission = async () => {
+    setSubmitError(null);
+
+    // Validation minimale — les champs marqués * dans le formulaire.
+    if (!selectedClient) return setSubmitError("Veuillez sélectionner une société demandeuse.");
+    if (!selectedContact) return setSubmitError("Veuillez sélectionner une personne demandeuse.");
+    if (!selectedInterpreter) return setSubmitError("Veuillez sélectionner un interprète.");
+    if (!selectedLanguage) return setSubmitError("Veuillez sélectionner une langue.");
+    if (!date) return setSubmitError("Veuillez renseigner la date de la mission.");
+
+    // Résolution des IDs — les libellés sélectionnés proviennent des listes.
+    const interpreterMatch = interpreters.find((i) => i.name === selectedInterpreter);
+    const clientMatch = clients.find((c) => c.name === selectedClient);
+    const contactMatch = contacts.find((c) => {
+      const name = [c.lastname, c.firstname].filter(Boolean).join(" ") || c.email;
+      return name === selectedContact;
+    });
+    const languageMatch = languages.find(
+      (l) => (l.display_name || l.label || l.ref) === selectedLanguage
+    );
+
+    // interpreter_id est un numeric côté user (Dolibarr) — parse défensif.
+    const interpreterId = Number(interpreterMatch?.raw?.id ?? interpreterMatch?.id ?? 0);
+    if (!interpreterId || Number.isNaN(interpreterId)) {
+      return setSubmitError("Impossible de résoudre l'interprète sélectionné.");
+    }
+
+    const statusCode = missionStatusLabel === "Validée" ? 1 : 0;
+
+    setSubmitting(true);
+    try {
+      const res = await crud.saveMission({
+        interpreter_id: interpreterId,
+        client_id: clientMatch?.id ?? undefined,
+        contact_id: contactMatch?.id ?? undefined,
+        label: label || undefined,
+        datemission: date,
+        heuredebutmission: time || undefined,
+        dureemission: duration || undefined,
+        mission_status: statusCode,
+        mission_types: [missionType],
+        id_produit_service: languageMatch?.id ?? undefined,
+        commentaires: comments || undefined,
+      });
+      if (res && res.success === false) {
+        throw new Error(res.message || "Création de la mission refusée par le serveur.");
+      }
+      if (onCreated) {
+        onCreated({
+          id: typeof res?.id === "number" ? res.id : undefined,
+          ref: typeof res?.ref === "string" ? res.ref : undefined,
+        });
+      } else {
+        onBack();
+      }
+    } catch (e: any) {
+      console.error("Création mission impossible", e);
+      const msg =
+        e?.response?.data?.error ||
+        e?.response?.data?.message ||
+        e?.message ||
+        "Création de la mission impossible.";
+      setSubmitError(msg);
+      if (onError) onError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="max-w-4xl mx-auto px-8 py-6">
@@ -1250,6 +1730,8 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
                 </label>
                 <input
                   type="text"
+                  value={label}
+                  onChange={(e) => setLabel(e.target.value)}
                   className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
                   style={{
                     borderColor: currentTheme.colors.border,
@@ -1273,6 +1755,9 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
               </label>
               <input
                 type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                required
                 className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
                 style={{
                   borderColor: currentTheme.colors.border,
@@ -1287,6 +1772,8 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
               </label>
               <input
                 type="time"
+                value={time}
+                onChange={(e) => setTime(e.target.value)}
                 className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
                 style={{
                   borderColor: currentTheme.colors.border,
@@ -1301,7 +1788,10 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
               </label>
               <input
                 type="number"
+                value={duration}
+                onChange={(e) => setDuration(e.target.value)}
                 placeholder="60"
+                min="0"
                 className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
                 style={{
                   borderColor: currentTheme.colors.border,
@@ -1330,34 +1820,47 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
                 <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                   Société demandeuse *
                 </label>
-                <select
-                  className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
-                  style={{
-                    borderColor: currentTheme.colors.border,
-                    color: currentTheme.colors.text,
-                  }}
-                >
-                  <option value="">Sélectionner une société</option>
-                  <option>CADA Marseille - Groupe SOS Solidarités</option>
-                  <option>HOPITAL EMILE ROUX</option>
-                  <option>ATPA Grenoble Port de Claix</option>
-                  <option>Tribunal de Paris</option>
-                </select>
+                <AutocompleteSelect
+                  value={selectedClient}
+                  onChange={setSelectedClient}
+                  options={clientOptions}
+                  loading={clientsLoading}
+                  placeholder="Rechercher une société"
+                  required
+                  helperText="Société absente ? Utilisez le bouton « + Nouveau »."
+                  currentTheme={currentTheme}
+                  onCreateNew={() => setIsCreateClientOpen(true)}
+                  createNewLabel="Créer une nouvelle société"
+                />
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                   Personne demandeuse *
                 </label>
-                <select
-                  className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
-                  style={{
-                    borderColor: currentTheme.colors.border,
-                    color: currentTheme.colors.text,
-                  }}
-                >
-                  <option value="">Sélectionner une personne</option>
-                </select>
+                <AutocompleteSelect
+                  value={selectedContact}
+                  onChange={setSelectedContact}
+                  options={contactOptions}
+                  loading={contactsLoading}
+                  placeholder={
+                    selectedClientId
+                      ? "Rechercher un contact"
+                      : "Sélectionnez d'abord une société"
+                  }
+                  disabled={!selectedClientId}
+                  required
+                  helperText={
+                    selectedClientId
+                      ? "Contact absent ? Utilisez le bouton « + Nouveau »."
+                      : "Le contact est rattaché à la société sélectionnée."
+                  }
+                  currentTheme={currentTheme}
+                  onCreateNew={
+                    selectedClientId ? () => setIsCreateContactOpen(true) : undefined
+                  }
+                  createNewLabel="Créer un nouveau contact"
+                />
               </div>
             </div>
           </div>
@@ -1372,36 +1875,36 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
               <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                 Interprète *
               </label>
-              <select
-                className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
-                style={{
-                  borderColor: currentTheme.colors.border,
-                  color: currentTheme.colors.text,
-                }}
-              >
-                <option value="">Sélectionner un interprète</option>
-                <option>NELLY</option>
-                <option>ABBAS AZHAR</option>
-                <option>ABAD ANNA</option>
-              </select>
+              <AutocompleteSelect
+                value={selectedInterpreter}
+                onChange={setSelectedInterpreter}
+                options={interpreterOptions}
+                loading={interpretersLoading}
+                placeholder="Rechercher un interprète"
+                required
+                helperText="Interprète absent ? Utilisez le bouton « + Nouveau »."
+                currentTheme={currentTheme}
+                onCreateNew={() => setIsCreateInterpreterOpen(true)}
+                createNewLabel="Créer un nouvel interprète"
+              />
             </div>
 
             <div>
               <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                 Langue * (ref produit)
               </label>
-              <select
-                className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
-                style={{
-                  borderColor: currentTheme.colors.border,
-                  color: currentTheme.colors.text,
-                }}
-              >
-                <option value="">Sélectionner une langue</option>
-                <option>Géorgien vers Français</option>
-                <option>Kurde vers Français</option>
-                <option>Bengali vers Français</option>
-              </select>
+              <AutocompleteSelect
+                value={selectedLanguage}
+                onChange={setSelectedLanguage}
+                options={languageOptions}
+                loading={languagesLoading}
+                placeholder="Rechercher une langue"
+                required
+                helperText="Langue absente ? Utilisez le bouton « + Nouveau »."
+                currentTheme={currentTheme}
+                onCreateNew={() => setIsCreateLanguageOpen(true)}
+                createNewLabel="Créer une nouvelle langue"
+              />
             </div>
           </div>
           </div>
@@ -1412,6 +1915,8 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
             </label>
             <textarea
               rows={4}
+              value={comments}
+              onChange={(e) => setComments(e.target.value)}
               className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all resize-none"
               style={{
                 borderColor: currentTheme.colors.border,
@@ -1426,31 +1931,49 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
               Statut mission
             </label>
             <select
+              value={missionStatusLabel}
+              onChange={(e) => setMissionStatusLabel(e.target.value as "Brouillon" | "Validée")}
               className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
               style={{
                 borderColor: currentTheme.colors.border,
                 color: currentTheme.colors.text,
               }}
             >
-              <option>Brouillon</option>
-              <option>Validée</option>
+              <option value="Brouillon">Brouillon</option>
+              <option value="Validée">Validée</option>
             </select>
           </div>
 
+          {submitError && (
+            <div
+              className="px-4 py-3 rounded-lg text-sm"
+              style={{
+                backgroundColor: currentTheme.colors.error + "20",
+                color: currentTheme.colors.error,
+                border: `1px solid ${currentTheme.colors.error}`,
+              }}
+            >
+              {submitError}
+            </div>
+          )}
+
           <div className="flex gap-4 pt-4">
             <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              className="flex-1 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
+              whileHover={{ scale: submitting ? 1 : 1.02 }}
+              whileTap={{ scale: submitting ? 1 : 0.98 }}
+              onClick={handleCreateMission}
+              disabled={submitting}
+              className="flex-1 px-6 py-3 text-white rounded-lg font-medium shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
               style={{ backgroundColor: currentTheme.colors.primary }}
             >
-              Créer la mission
+              {submitting ? "Création…" : "Créer la mission"}
             </motion.button>
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={onBack}
-              className="px-6 py-3 rounded-lg font-medium"
+              disabled={submitting}
+              className="px-6 py-3 rounded-lg font-medium disabled:opacity-60"
               style={{
                 backgroundColor: currentTheme.colors.primaryLight,
                 color: currentTheme.colors.primary,
@@ -1461,6 +1984,39 @@ function CreateMissionForm({ onBack }: { onBack: () => void }) {
           </div>
         </div>
       </motion.div>
+
+      {/* ─── Modales de création rapide ──────────────────────────────────
+          On réutilise les modales riches des pages métier pour offrir la
+          MÊME UX que les boutons « Ajouter » des pages Interprètes / Tiers.
+          Seule la langue reste sur ReferentielFormModal (fichier partagé
+          avec AdminPage → onglet Langues, même liste de champs). */}
+      <EditInterpreterModal
+        isOpen={isCreateInterpreterOpen}
+        onClose={() => setIsCreateInterpreterOpen(false)}
+        interpreter={null}
+        onSave={handleCreateInterpreter}
+      />
+      <EditCompanyModal
+        isOpen={isCreateClientOpen}
+        onClose={() => setIsCreateClientOpen(false)}
+        company={null}
+        onSave={handleCreateClient}
+      />
+      <EditContactModal
+        isOpen={isCreateContactOpen}
+        onClose={() => setIsCreateContactOpen(false)}
+        contact={null}
+        companyName={selectedClient || undefined}
+        onSave={handleCreateContact}
+      />
+      <ReferentielFormModal
+        isOpen={isCreateLanguageOpen}
+        onClose={() => setIsCreateLanguageOpen(false)}
+        onSave={handleCreateLanguage}
+        title="Nouvelle langue"
+        fields={CREATE_LANGUAGE_FIELDS}
+        initialValues={{}}
+      />
     </div>
   );
 }

@@ -1,0 +1,17 @@
+{
+    "name": "planete-traduction/futurami-api",
+    "description": "API backend futurAMI - dépendances Composer (mPDF pour génération PDF facture atomique server-side).",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.0",
+        "mpdf/mpdf": "^8.2"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

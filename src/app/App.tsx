@@ -16,6 +16,7 @@ import { EmptyState } from "./components/EmptyState";
 import { ViewModeSelector, ViewMode } from "./components/ViewModeSelector";
 import { EditInterpreterModal } from "./components/EditInterpreterModal";
 import { useInterpreters, crud } from "../lib/hooks";
+import { useAuthStore } from "../store/auth";
 import { motion } from "motion/react";
 import { FileText, Download, FileSpreadsheet, UserPlus, Users, Phone, Mail, MessageSquare, Edit, Trash2 } from "lucide-react";
 
@@ -26,6 +27,7 @@ function AppContent() {
   const [editingInterpreter, setEditingInterpreter] = useState<any | null>(null);
   const [isEditInterpreterModalOpen, setIsEditInterpreterModalOpen] = useState(false);
   const { currentTheme } = useTheme();
+  const authUser = useAuthStore((s) => s.user);
 
   // Interprètes chargés depuis l'API (get_interpretes.php) — filtrage côté client
   const { data: interpreters, refetch: refetchInterpreters } = useInterpreters();
@@ -145,7 +147,7 @@ function AppContent() {
       <Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        userName="Anna FALL"
+        userName={authUser?.fullName || authUser?.username || ""}
       />
 
       <main className="flex-1 overflow-auto">
@@ -225,7 +227,10 @@ function AppContent() {
 
             <SearchBar
               onSearch={setSearchQuery}
-              onAddNew={() => alert("Ajouter un nouvel interprète")}
+              onAddNew={() => {
+                setEditingInterpreter(null);
+                setIsEditInterpreterModalOpen(true);
+              }}
             />
 
             {filteredInterpreters.length === 0 ? (
@@ -235,7 +240,10 @@ function AppContent() {
                 description={searchQuery ? "Essayez de modifier vos critères de recherche" : "Ajoutez votre premier interprète pour commencer"}
                 action={!searchQuery ? {
                   label: "Ajouter un interprète",
-                  onClick: () => alert("Ajouter un nouvel interprète")
+                  onClick: () => {
+                    setEditingInterpreter(null);
+                    setIsEditInterpreterModalOpen(true);
+                  }
                 } : undefined}
               />
             ) : viewMode === "cards" ? (

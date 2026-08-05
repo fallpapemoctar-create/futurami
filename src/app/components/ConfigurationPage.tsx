@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
 import { motion } from "motion/react";
-import { Building, Upload, Save, X } from "lucide-react";
+import { Building, Upload, Save, X, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
-import { api } from "../../lib/api";
+import { api, resolveLogoSrc } from "../../lib/api";
 
 interface CompanyConfig {
   name: string;
-  logo?: File | string;
+  logoUrl?: string; // chemin relatif persisté (renvoyé par upload_logo.php)
   addressLine1: string;
   addressLine2: string;
   postalCode: string;
@@ -50,6 +50,7 @@ export function ConfigurationPage() {
       if (!c) return;
       setConfig({
         name: c.name || "",
+        logoUrl: c.logoUrl || "",
         addressLine1: c.addressLine1 || "",
         addressLine2: c.addressLine2 || "",
         postalCode: c.postalCode || "",
@@ -64,36 +65,66 @@ export function ConfigurationPage() {
         iban: c.bankIban || "",
         bic: c.bankBic || "",
       });
-      if (c.logoUrl) setLogoPreview(c.logoUrl);
+      if (c.logoUrl) setLogoPreview(resolveLogoSrc(c.logoUrl));
     }).catch(() => { /* keep empty form */ });
     return () => { cancelled = true; };
   }, []);
 
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   const handleChange = (field: keyof CompanyConfig, value: string) => {
     setConfig((prev) => ({ ...prev, [field]: value }));
     setHasChanges(true);
+    setSaveSuccess(false);
   };
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setConfig((prev) => ({ ...prev, logo: file }));
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setLogoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-      setHasChanges(true);
+    if (!file) return;
+
+    setLogoError(null);
+    // Aperçu instantané en local pendant l'upload.
+    const reader = new FileReader();
+    reader.onloadend = () => setLogoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+
+    setUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append("logo", file);
+      const res = await api.post("upload_logo.php", formData, {
+        headers: { "Content-Type": undefined }, // laisse le navigateur poser le boundary multipart
+      });
+      if (res.data?.success && res.data?.logoUrl) {
+        setConfig((prev) => ({ ...prev, logoUrl: res.data.logoUrl }));
+        setLogoPreview(resolveLogoSrc(res.data.logoUrl));
+        setHasChanges(true);
+        setSaveSuccess(false);
+      } else {
+        setLogoError(res.data?.error || "Échec de l'envoi du logo");
+      }
+    } catch (err: any) {
+      setLogoError(err?.response?.data?.error || "Échec de l'envoi du logo");
+    } finally {
+      setUploadingLogo(false);
+      e.target.value = ""; // permet de re-sélectionner le même fichier si besoin
     }
   };
 
   const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
     try {
       await api.post("update_company_info.php", {
         name: config.name,
+        logoUrl: config.logoUrl || "",
         addressLine1: config.addressLine1,
         addressLine2: config.addressLine2,
         postalCode: config.postalCode,
@@ -109,14 +140,20 @@ export function ConfigurationPage() {
         bankBic: config.bic,
       });
       setHasChanges(false);
-    } catch (e) {
+      setSaveSuccess(true);
+    } catch (e: any) {
       console.error("Sauvegarde impossible", e);
+      setSaveError(e?.response?.data?.error || e?.message || "Erreur inconnue lors de l'enregistrement");
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleReset = () => {
-    setLogoPreview(null);
+    setLogoPreview(resolveLogoSrc(config.logoUrl));
     setHasChanges(false);
+    setSaveError(null);
+    setSaveSuccess(false);
   };
 
   return (
@@ -171,10 +208,16 @@ export function ConfigurationPage() {
                   {logoPreview ? (
                     <div className="relative w-24 h-24 border-2 rounded-lg overflow-hidden" style={{ borderColor: currentTheme.colors.border }}>
                       <img src={logoPreview} alt="Logo preview" className="w-full h-full object-contain" />
+                      {uploadingLogo && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                          <Loader2 className="w-6 h-6 animate-spin" style={{ color: currentTheme.colors.primary }} />
+                        </div>
+                      )}
                       <button
                         onClick={() => {
                           setLogoPreview(null);
-                          setConfig((prev) => ({ ...prev, logo: undefined }));
+                          setConfig((prev) => ({ ...prev, logoUrl: "" }));
+                          setHasChanges(true);
                         }}
                         className="absolute -top-2 -right-2 p-1 rounded-full bg-white shadow-lg"
                         style={{ color: currentTheme.colors.error }}
@@ -184,25 +227,36 @@ export function ConfigurationPage() {
                     </div>
                   ) : (
                     <div className="w-24 h-24 border-2 border-dashed rounded-lg flex items-center justify-center" style={{ borderColor: currentTheme.colors.border }}>
-                      <Building className="w-8 h-8" style={{ color: currentTheme.colors.textLight }} />
+                      {uploadingLogo ? (
+                        <Loader2 className="w-6 h-6 animate-spin" style={{ color: currentTheme.colors.primary }} />
+                      ) : (
+                        <Building className="w-8 h-8" style={{ color: currentTheme.colors.textLight }} />
+                      )}
                     </div>
                   )}
-                  <label className="cursor-pointer">
-                    <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" />
+                  <label className={uploadingLogo ? "cursor-not-allowed" : "cursor-pointer"}>
+                    <input type="file" accept="image/*" onChange={handleLogoUpload} className="hidden" disabled={uploadingLogo} />
                     <motion.div
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ scale: uploadingLogo ? 1 : 1.02 }}
+                      whileTap={{ scale: uploadingLogo ? 1 : 0.98 }}
                       className="px-4 py-2.5 rounded-lg border-2 border-dashed font-medium text-sm flex items-center gap-2"
                       style={{
                         borderColor: currentTheme.colors.primary,
                         color: currentTheme.colors.primary,
+                        opacity: uploadingLogo ? 0.6 : 1,
                       }}
                     >
                       <Upload className="w-4 h-4" />
-                      Télécharger un logo
+                      {uploadingLogo ? "Envoi en cours…" : "Télécharger un logo"}
                     </motion.div>
                   </label>
                 </div>
+                {logoError && (
+                  <p className="text-sm mt-2 flex items-center gap-1.5" style={{ color: currentTheme.colors.error }}>
+                    <AlertCircle className="w-4 h-4" />
+                    {logoError}
+                  </p>
+                )}
               </div>
             </div>
           </motion.div>
@@ -468,12 +522,24 @@ export function ConfigurationPage() {
           </motion.div>
 
           {/* Boutons d'action */}
-          <div className="flex justify-end gap-3">
+          <div className="flex items-center justify-end gap-3">
+            {saveError && (
+              <p className="text-sm flex items-center gap-1.5 mr-auto" style={{ color: currentTheme.colors.error }}>
+                <AlertCircle className="w-4 h-4" />
+                {saveError}
+              </p>
+            )}
+            {saveSuccess && !hasChanges && (
+              <p className="text-sm flex items-center gap-1.5 mr-auto" style={{ color: currentTheme.colors.success }}>
+                <CheckCircle2 className="w-4 h-4" />
+                Modifications enregistrées
+              </p>
+            )}
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleReset}
-              disabled={!hasChanges}
+              disabled={!hasChanges || saving}
               className="px-6 py-2.5 border rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 borderColor: currentTheme.colors.border,
@@ -486,12 +552,12 @@ export function ConfigurationPage() {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleSave}
-              disabled={!hasChanges}
+              disabled={!hasChanges || saving || uploadingLogo}
               className="px-6 py-2.5 text-white rounded-lg font-medium flex items-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ backgroundColor: currentTheme.colors.primary }}
             >
-              <Save className="w-4 h-4" />
-              Enregistrer
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? "Enregistrement…" : "Enregistrer"}
             </motion.button>
           </div>
         </div>

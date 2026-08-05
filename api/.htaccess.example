@@ -1,0 +1,27 @@
+# futurAMI — configuration environnement pour l'API PHP (MODELE)
+#
+# Copiez ce fichier en api/.htaccess (non versionné, voir .gitignore) et
+# remplacez AUTH_SECRET par une valeur générée avec :
+#   php -r "echo bin2hex(random_bytes(48));"
+#
+# Ce fichier fixe explicitement DOLIBARR_ENTITY pour que l'API cible bien
+# l'entité 2 (PLANETE TRADUCTION FRANCE) dans la base Dolibarr partagée avec
+# AMI-PTF.
+
+<IfModule mod_env.c>
+    SetEnv DOLIBARR_ENTITY 2
+
+    # Secret HS256 utilisé pour signer les tokens d'authentification.
+    # Doit être une chaîne aléatoire d'au moins 32 caractères, IDENTIQUE
+    # en local et en prod pour ce déploiement, mais DIFFÉRENTE de celle
+    # utilisée par AMI-PTF (une entité = un secret).
+    SetEnv AUTH_SECRET "REMPLACER_PAR_UNE_CLE_ALEATOIRE_64_CARACTERES_HEX"
+
+    # Durée de vie du token en secondes (défaut 12h)
+    SetEnv AUTH_TOKEN_TTL 43200
+</IfModule>
+
+# Le bloc <LimitExcept>/Require all denied d'AMI-PTF a été omis ici : il
+# exige que AllowOverride autorise "Limit"/"AuthConfig" sur le vhost, sinon
+# Apache renvoie une 500 sur tout le dossier api/. À réintroduire seulement
+# après avoir vérifié la config AllowOverride du vhost WAMP concerné.

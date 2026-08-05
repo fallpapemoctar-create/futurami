@@ -1,38 +1,149 @@
+import { useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { Download, FileSpreadsheet, FileText, Calendar, Filter, Database } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
+import { useInterpreters, useClients, useMissions, useClientInvoices } from "../../lib/hooks";
+
+type ExportFormat = "Excel" | "CSV" | "PDF";
+
+function escapeCsv(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (/[",;\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function downloadCsv(filename: string, headers: string[], rows: (string | number | null | undefined)[][]) {
+  const lines = [headers.map(escapeCsv).join(";")];
+  for (const row of rows) {
+    lines.push(row.map(escapeCsv).join(";"));
+  }
+  const BOM = "\uFEFF";
+  const blob = new Blob([BOM + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 export function ExportPage() {
   const { currentTheme } = useTheme();
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+
+  const { data: interpreters } = useInterpreters();
+  const { data: clients } = useClients();
+  const { data: missionsData } = useMissions({
+    page: 1,
+    pageSize: 10000,
+    dateStart: dateStart || undefined,
+    dateEnd: dateEnd || undefined,
+  });
+  const { data: invoicesData } = useClientInvoices({ page: 1, pageSize: 10000 });
+
+  const exporters = useMemo(
+    () => ({
+      missions: () =>
+        downloadCsv(
+          `missions_${new Date().toISOString().slice(0, 10)}.csv`,
+          ["Référence", "Date", "Client", "Interprète", "Langue", "Type", "Statut", "Facturée"],
+          missionsData.missions.map((m) => [
+            m.reference_devis,
+            m.datemission_iso ?? m.datemission ?? "",
+            m.client_name,
+            m.interpreter_name,
+            m.produit_label || m.produit_ref,
+            (m.mission_types ?? []).join(" + "),
+            m.mission_status,
+            m.client_billed_status_label ?? "",
+          ])
+        ),
+      invoices: () =>
+        downloadCsv(
+          `factures_${new Date().toISOString().slice(0, 10)}.csv`,
+          ["Numéro", "Client", "Période", "Date émission", "Total HT", "Total TTC", "Statut"],
+          invoicesData.invoices.map((i) => [
+            i.invoice_number,
+            i.client_name,
+            i.period_month,
+            i.billed_at,
+            i.invoice_total_ht ?? "",
+            i.invoice_total_ttc ?? "",
+            i.status_label,
+          ])
+        ),
+      interpreters: () =>
+        downloadCsv(
+          `interpretes_${new Date().toISOString().slice(0, 10)}.csv`,
+          ["Nom", "Langues", "Téléphone", "Email", "Statut"],
+          interpreters.map((it) => [it.name, it.languages, it.phone ?? "", it.email ?? "", it.status])
+        ),
+      clients: () =>
+        downloadCsv(
+          `clients_${new Date().toISOString().slice(0, 10)}.csv`,
+          ["Nom", "Alias", "Adresse", "CP", "Ville", "Pays", "Téléphone", "Email", "SIRET"],
+          clients.map((c) => [
+            c.name,
+            c.alias,
+            c.address,
+            c.zip,
+            c.town,
+            c.country_label,
+            c.phone,
+            c.email,
+            c.siret,
+          ])
+        ),
+    }),
+    [missionsData.missions, invoicesData.invoices, interpreters, clients]
+  );
+
+  const handleExport = (id: keyof typeof exporters, format: ExportFormat) => {
+    if (format !== "CSV") {
+      alert(`L'export ${format} sera disponible prochainement. Veuillez utiliser CSV en attendant.`);
+      return;
+    }
+    exporters[id]();
+  };
 
   const exportOptions = [
     {
-      id: "missions",
+      id: "missions" as const,
       title: "Export des missions",
       description: "Exporter toutes les missions avec leurs détails",
       icon: FileText,
-      formats: ["Excel", "CSV", "PDF"],
+      formats: ["Excel", "CSV", "PDF"] as ExportFormat[],
+      count: missionsData.total,
     },
     {
-      id: "invoices",
+      id: "invoices" as const,
       title: "Export des factures",
       description: "Exporter les factures et les données de facturation",
       icon: FileSpreadsheet,
-      formats: ["Excel", "CSV", "PDF"],
+      formats: ["Excel", "CSV", "PDF"] as ExportFormat[],
+      count: invoicesData.total,
     },
     {
-      id: "interpreters",
+      id: "interpreters" as const,
       title: "Export des interprètes",
       description: "Exporter l'annuaire complet des interprètes",
       icon: Database,
-      formats: ["Excel", "CSV"],
+      formats: ["Excel", "CSV"] as ExportFormat[],
+      count: interpreters.length,
     },
     {
-      id: "clients",
+      id: "clients" as const,
       title: "Export des tiers",
       description: "Exporter les sociétés et contacts",
       icon: Database,
-      formats: ["Excel", "CSV"],
+      formats: ["Excel", "CSV"] as ExportFormat[],
+      count: clients.length,
     },
   ];
 
@@ -65,21 +176,23 @@ export function ExportPage() {
           </div>
           <div className="flex-1">
             <h3 className="text-xl font-bold mb-1" style={{ color: currentTheme.colors.text }}>
-              Filtres de période
+              Filtres de période (missions)
             </h3>
             <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>
-              Sélectionnez la période pour vos exports
+              S'applique uniquement à l'export des missions
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
               Date de début
             </label>
             <input
               type="date"
+              value={dateStart}
+              onChange={(e) => setDateStart(e.target.value)}
               className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
               style={{
                 borderColor: currentTheme.colors.border,
@@ -94,31 +207,14 @@ export function ExportPage() {
             </label>
             <input
               type="date"
+              value={dateEnd}
+              onChange={(e) => setDateEnd(e.target.value)}
               className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
               style={{
                 borderColor: currentTheme.colors.border,
                 color: currentTheme.colors.text,
               }}
             />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
-              Période prédéfinie
-            </label>
-            <select
-              className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
-              style={{
-                borderColor: currentTheme.colors.border,
-                color: currentTheme.colors.text,
-              }}
-            >
-              <option>Mois en cours</option>
-              <option>Mois dernier</option>
-              <option>Trimestre en cours</option>
-              <option>Année en cours</option>
-              <option>Personnalisé</option>
-            </select>
           </div>
         </div>
       </motion.div>
@@ -154,6 +250,9 @@ export function ExportPage() {
                   <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>
                     {option.description}
                   </p>
+                  <p className="text-xs mt-1" style={{ color: currentTheme.colors.primary }}>
+                    {option.count} enregistrement{option.count > 1 ? "s" : ""}
+                  </p>
                 </div>
               </div>
 
@@ -167,6 +266,7 @@ export function ExportPage() {
                       key={format}
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
+                      onClick={() => handleExport(option.id, format)}
                       className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-white rounded-lg font-medium text-sm"
                       style={{ backgroundColor: currentTheme.colors.primary }}
                     >
@@ -200,15 +300,15 @@ export function ExportPage() {
             <ul className="space-y-2 text-sm" style={{ color: currentTheme.colors.text }}>
               <li className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: currentTheme.colors.primary }} />
-                Les exports incluent toutes les données de la période sélectionnée
+                Les fichiers CSV utilisent l'encodage UTF-8 avec BOM (compatible Excel).
               </li>
               <li className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: currentTheme.colors.primary }} />
-                Les fichiers CSV utilisent l'encodage UTF-8
+                Le séparateur de colonnes est le point-virgule pour conserver la compatibilité avec Excel français.
               </li>
               <li className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: currentTheme.colors.primary }} />
-                Les exports PDF incluent les en-têtes et logos personnalisés
+                Les exports Excel (.xlsx) et PDF nécessitent l'ajout de librairies serveur — en cours d'implémentation.
               </li>
             </ul>
           </div>

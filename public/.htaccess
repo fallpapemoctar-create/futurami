@@ -1,0 +1,28 @@
+# futurAMI — .htaccess racine (front SPA)
+#
+# Ce fichier est déployé À LA RACINE du docroot (à côté de index.html).
+# Placé dans public/, Vite le copie automatiquement dans dist/ à chaque build.
+#
+# La 1re ligne (AddCharset) reproduit le comportement par défaut d'IONOS
+# — à conserver pour ne pas perdre l'encodage UTF-8 auto sur les .html.
+
+AddCharset UTF-8 .html
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Base URL — décommenter et ajuster si le site est déployé dans un
+    # sous-dossier (ex: /futurami/). Laisser commenté pour un sous-domaine.
+    # RewriteBase /
+
+    # 1) Ne PAS rewriter les requêtes vers l'API PHP
+    RewriteRule ^api(/|$) - [L]
+
+    # 2) Ne PAS rewriter si le fichier ou dossier existe réellement
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 3) Tout le reste (URLs propres du router React) → index.html
+    RewriteRule ^ index.html [L]
+</IfModule>

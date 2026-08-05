@@ -6,7 +6,7 @@ import { EmptyState } from "./EmptyState";
 import { ViewModeSelector, ViewMode } from "./ViewModeSelector";
 import { TiersDetailPage } from "./TiersDetailPage";
 import { EditCompanyModal } from "./EditCompanyModal";
-import { useClients, useContacts, crud } from "../../lib/hooks";
+import { useClients, useAllContacts, crud } from "../../lib/hooks";
 
 interface Company {
   id: string;
@@ -121,13 +121,13 @@ export function TiersPage() {
     city: c.town || undefined,
   }));
 
-  // Contacts globaux: l'API exige client_id — on n'affiche rien sans sélection.
-  // TODO: si un client est sélectionné ailleurs, brancher useContacts(clientId).
-  const contacts: Contact[] = useContacts(null).data.map((c) => ({
+  // Contacts globaux (toutes sociétés confondues), recherche déléguée au serveur.
+  const contactsQuery = useAllContacts(searchQuery);
+  const contacts: Contact[] = contactsQuery.data.map((c) => ({
     id: String(c.id ?? ''),
     name: [c.firstname, c.lastname].filter(Boolean).join(' ') || c.email || '—',
     country: c.country_label || '',
-    company: undefined,
+    company: c.company_name || undefined,
   }));
 
   const filteredCompanies = companies.filter(c =>
@@ -178,9 +178,17 @@ export function TiersPage() {
     setEditingCompany(null);
   };
 
+  // « Voir détails » sur une société → bascule en vue master-detail avec la
+  // société pré-sélectionnée (permet de consulter/gérer ses contacts).
+  const [detailInitialCompanyId, setDetailInitialCompanyId] = useState<string | null>(null);
+  const handleViewCompany = (company: Company) => {
+    setDetailInitialCompanyId(company.id);
+    setLayoutMode("masterdetail");
+  };
+
   // Si mode master-detail, afficher la page dédiée
   if (layoutMode === "masterdetail") {
-    return <TiersDetailPage />;
+    return <TiersDetailPage initialCompanyId={detailInitialCompanyId} />;
   }
 
   return (
@@ -307,11 +315,19 @@ export function TiersPage() {
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              onClick={() => {
+                if (activeSection === "companies") {
+                  setEditingCompany(null);
+                  setIsEditCompanyModalOpen(true);
+                } else {
+                  alert("L'ajout d'un contact requiert la sélection préalable d'une société. Utilisez la vue Détail.");
+                }
+              }}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 text-white rounded-lg font-medium mt-4"
               style={{ backgroundColor: currentTheme.colors.primary }}
             >
               <Plus className="w-5 h-5" />
-              <span>Ajouter</span>
+              <span>{activeSection === "companies" ? "Ajouter une société" : "Ajouter un contact"}</span>
             </motion.button>
           </motion.div>
         </div>
@@ -346,7 +362,7 @@ export function TiersPage() {
           </motion.div>
 
           {activeSection === "companies" ? (
-            <CompanyList companies={filteredCompanies} viewMode={viewMode} currentTheme={currentTheme} onEdit={handleEditCompany} />
+            <CompanyList companies={filteredCompanies} viewMode={viewMode} currentTheme={currentTheme} onEdit={handleEditCompany} onDelete={handleDeleteCompany} onView={handleViewCompany} />
           ) : (
             <ContactList contacts={filteredContacts} viewMode={viewMode} currentTheme={currentTheme} />
           )}
@@ -364,9 +380,9 @@ export function TiersPage() {
   );
 }
 
-function CompanyList({ companies, viewMode, currentTheme, onEdit }: { companies: Company[]; viewMode: ViewMode; currentTheme: any; onEdit: (company: Company) => void }) {
+function CompanyList({ companies, viewMode, currentTheme, onEdit, onDelete, onView }: { companies: Company[]; viewMode: ViewMode; currentTheme: any; onEdit: (company: Company) => void; onDelete: (company: Company) => void; onView: (company: Company) => void }) {
   if (viewMode === "table") {
-    return <CompaniesTable companies={companies} currentTheme={currentTheme} onEdit={onEdit} />;
+    return <CompaniesTable companies={companies} currentTheme={currentTheme} onEdit={onEdit} onDelete={onDelete} onView={onView} />;
   }
 
   return (
@@ -417,6 +433,7 @@ function CompanyList({ companies, viewMode, currentTheme, onEdit }: { companies:
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
+                onClick={() => onView(company)}
                 className="p-2 rounded-lg text-white"
                 style={{ backgroundColor: currentTheme.colors.primary }}
                 title="Voir détails"
@@ -436,6 +453,7 @@ function CompanyList({ companies, viewMode, currentTheme, onEdit }: { companies:
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
+                onClick={() => onDelete(company)}
                 className="p-2 rounded-lg text-white"
                 style={{ backgroundColor: currentTheme.colors.error }}
                 title="Supprimer"
@@ -560,7 +578,7 @@ function ContactList({ contacts, viewMode, currentTheme }: { contacts: Contact[]
   );
 }
 
-function CompaniesTable({ companies, currentTheme, onEdit }: { companies: Company[]; currentTheme: any; onEdit: (company: Company) => void }) {
+function CompaniesTable({ companies, currentTheme, onEdit, onDelete, onView }: { companies: Company[]; currentTheme: any; onEdit: (company: Company) => void; onDelete: (company: Company) => void; onView: (company: Company) => void }) {
   return (
     <motion.div
       initial={{ y: 20, opacity: 0 }}
@@ -673,6 +691,7 @@ function CompaniesTable({ companies, currentTheme, onEdit }: { companies: Compan
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
+                      onClick={() => onView(company)}
                       className="p-1.5 rounded-lg text-white"
                       style={{ backgroundColor: currentTheme.colors.primary }}
                       title="Voir détails"
@@ -692,6 +711,7 @@ function CompaniesTable({ companies, currentTheme, onEdit }: { companies: Compan
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
+                      onClick={() => onDelete(company)}
                       className="p-1.5 rounded-lg text-white"
                       style={{ backgroundColor: currentTheme.colors.error }}
                       title="Supprimer"

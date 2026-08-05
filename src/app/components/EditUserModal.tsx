@@ -27,30 +27,32 @@ interface EditUserModalProps {
   onSave: (user: User) => void;
 }
 
+const EMPTY_USER: User = {
+  id: "",
+  name: "",
+  email: "",
+  role: "",
+  permissions: {
+    missions: false,
+    invoices: false,
+    interpreters: false,
+    clients: false,
+    reports: false,
+    settings: false,
+  },
+  status: "Actif",
+};
+
 export function EditUserModal({ isOpen, onClose, user, onSave }: EditUserModalProps) {
   const { currentTheme } = useTheme();
-  const [formData, setFormData] = useState<User>({
-    id: "",
-    name: "",
-    email: "",
-    role: "",
-    permissions: {
-      missions: false,
-      invoices: false,
-      interpreters: false,
-      clients: false,
-      reports: false,
-      settings: false,
-    },
-    status: "Actif",
-  });
+  const isCreating = !user;
+  const [formData, setFormData] = useState<User>(EMPTY_USER);
 
-  // Mettre à jour les données du formulaire quand l'utilisateur change
   useEffect(() => {
-    if (user) {
-      setFormData(user);
+    if (isOpen) {
+      setFormData(user ?? EMPTY_USER);
     }
-  }, [user]);
+  }, [isOpen, user]);
 
   const handleChange = (field: keyof User, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -72,10 +74,8 @@ export function EditUserModal({ isOpen, onClose, user, onSave }: EditUserModalPr
     onClose();
   };
 
-  if (!user) return null;
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Modifier l'utilisateur" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={isCreating ? "Nouvel utilisateur" : "Modifier l'utilisateur"} size="lg">
       <form onSubmit={handleSubmit}>
         <div className="space-y-6">
           {/* Informations générales */}

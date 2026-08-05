@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   FileText, Download, Eye, Trash2, Plus, Calendar, Euro,
   CheckCircle, Clock, Search, Filter, X, ChevronLeft, ChevronRight,
-  FileSpreadsheet, TrendingUp, RefreshCw, Mail, FileMinus, AlertCircle
+  FileSpreadsheet, TrendingUp, RefreshCw, Mail, FileMinus, AlertCircle,
+  Save, Lock
 } from "lucide-react";
 import { useTheme } from "../contexts/ThemeContext";
 import { StatusChip } from "./StatusChip";
@@ -11,8 +12,9 @@ import { EmptyState } from "./EmptyState";
 import { ViewModeSelector, ViewMode } from "./ViewModeSelector";
 import { SendInvoiceEmailModal, EmailData } from "./SendInvoiceEmailModal";
 import { CreateCreditNoteModal, CreditNoteData } from "./CreateCreditNoteModal";
+import { CreateInvoiceDraftModal } from "./CreateInvoiceDraftModal";
 import { api } from "../../lib/api";
-import type { RawClientInvoice, RawInvoiceDraft } from "../../lib/hooks";
+import { crud, type RawClientInvoice, type RawInvoiceDraft, type RawMission, useClients, usePaymentTerms, useBankAccounts, useInvoiceDrafts } from "../../lib/hooks";
 
 interface Invoice {
   id: string;
@@ -83,6 +85,15 @@ export function FacturationPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [showFilters, setShowFilters] = useState(false);
 
+  // Brouillon en cours de reprise (transmis de l'onglet "Factures initiées"
+  // vers l'onglet "Préparation"). PreparationTab hydrate ses filtres avec ces
+  // valeurs au montage, puis notifie via onResumeConsumed().
+  const [resumeDraft, setResumeDraft] = useState<RawInvoiceDraft | null>(null);
+  const handleResumeDraft = (draft: RawInvoiceDraft) => {
+    setResumeDraft(draft);
+    setActiveTab("preparation");
+  };
+
   // Filtres
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClient, setFilterClient] = useState("");
@@ -97,6 +108,7 @@ export function FacturationPage() {
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
   const [isCreditNoteModalOpen, setIsCreditNoteModalOpen] = useState(false);
+  const [isCreateDraftModalOpen, setIsCreateDraftModalOpen] = useState(false);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -104,23 +116,36 @@ export function FacturationPage() {
 
   // Factures chargées depuis l'API (brouillons + émises fusionnés)
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
-  useEffect(() => {
-    let cancelled = false;
+  const reloadInvoices = () => {
     Promise.all([
       api.get("get_invoice_drafts.php", { params: { status: "all" } }).then((r) => r.data?.drafts ?? []).catch(() => []),
       api.post("get_client_invoices.php", { page: 1, pageSize: 500 }).then((r) => r.data?.invoices ?? []).catch(() => []),
     ]).then(([drafts, invoices]) => {
-      if (cancelled) return;
       const mapped: Invoice[] = [
         ...(drafts as RawInvoiceDraft[]).map(mapDraftToInvoice),
         ...(invoices as RawClientInvoice[]).map(mapClientInvoice),
       ];
       setAllInvoices(mapped);
     });
-    return () => {
-      cancelled = true;
-    };
+  };
+  useEffect(() => {
+    reloadInvoices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleCreateDraft = async (values: { client_id?: number; client_name?: string; month: string }) => {
+    try {
+      await crud.saveInvoiceDraft({
+        client_id: values.client_id,
+        client_name: values.client_name,
+        month: values.month,
+      });
+      reloadInvoices();
+    } catch (e: any) {
+      console.error("Création brouillon impossible", e);
+      alert(e?.response?.data?.error || "Création du brouillon impossible");
+    }
+  };
 
   // État des avoirs
   const [creditNotes, setCreditNotes] = useState<CreditNote[]>([]);
@@ -236,48 +261,89 @@ export function FacturationPage() {
     setIsCreditNoteModalOpen(true);
   };
 
-  const handleSendEmail = (emailData: EmailData) => {
-    console.log("Envoi d'email:", emailData);
-    // Ici vous ajouteriez la logique d'envoi d'email
-    alert(`Email envoyé à ${emailData.to.join(", ")} avec la facture ${selectedInvoice?.ref} en PJ`);
+  const handleSendEmail = async (emailData: EmailData) => {
+    if (!selectedInvoice) return;
+    try {
+      const res = await crud.sendInvoiceEmail({
+        invoice_number: selectedInvoice.ref,
+        to: emailData.to,
+        cc: emailData.cc,
+        subject: emailData.subject,
+        body: emailData.message,
+      });
+      alert(res?.message ?? `Demande d'envoi enregistrée pour ${selectedInvoice.ref}`);
+    } catch (e: any) {
+      console.error("Envoi email impossible", e);
+      alert(e?.response?.data?.error || "Envoi de l'email impossible");
+    }
   };
 
-  const handleCreateCreditNote = (creditNoteData: CreditNoteData) => {
+  const handleMarkPaid = async (invoice: Invoice) => {
+    if (!confirm(`Marquer la facture ${invoice.ref} comme payée ?`)) return;
+    try {
+      await crud.updateClientInvoiceStatus({
+        invoice_number: invoice.ref,
+        status: "paid",
+        status_label: "Payée",
+      });
+      reloadInvoices();
+    } catch (e: any) {
+      console.error("Mise à jour du statut impossible", e);
+      alert(e?.response?.data?.error || "Mise à jour du statut impossible");
+    }
+  };
+
+  const handleMarkSent = async (invoice: Invoice) => {
+    if (!confirm(`Marquer la facture ${invoice.ref} comme envoyée ?`)) return;
+    try {
+      await crud.updateClientInvoiceStatus({
+        invoice_number: invoice.ref,
+        status: "sent",
+        status_label: "Envoyée",
+      });
+      reloadInvoices();
+    } catch (e: any) {
+      console.error("Mise à jour du statut impossible", e);
+      alert(e?.response?.data?.error || "Mise à jour du statut impossible");
+    }
+  };
+
+  const handleCreateCreditNote = async (creditNoteData: CreditNoteData) => {
     if (!selectedInvoice) return;
+    try {
+      const res = await crud.createCreditNote({
+        source_invoice_number: creditNoteData.originalInvoiceRef,
+        mode: creditNoteData.type,
+        reason: creditNoteData.reason || creditNoteData.description || "Avoir",
+      });
+      const ref = res?.credit_note_number ?? res?.invoice_number ?? "(numéro indisponible)";
 
-    // Générer une référence unique pour l'avoir
-    const year = new Date().getFullYear();
-    const creditNoteNumber = creditNotes.length + 1;
-    const ref = `AV-${year}-${String(creditNoteNumber).padStart(5, "0")}`;
+      // Maintenir l'affichage local d'avoirs en attendant un onglet câblé serveur
+      const newCreditNote: CreditNote = {
+        id: `credit-note-${Date.now()}`,
+        ref,
+        originalInvoiceId: creditNoteData.originalInvoiceId,
+        originalInvoiceRef: creditNoteData.originalInvoiceRef,
+        client: selectedInvoice.client,
+        date: new Date().toLocaleDateString("fr-FR"),
+        reason: creditNoteData.reason,
+        type: creditNoteData.type,
+        amountHT: creditNoteData.amountHT,
+        amountTTC: creditNoteData.amountTTC,
+        description: creditNoteData.description,
+        status: "Brouillon",
+      };
+      setCreditNotes((prev) => [newCreditNote, ...prev]);
 
-    // Créer l'avoir
-    const newCreditNote: CreditNote = {
-      id: `credit-note-${Date.now()}`,
-      ref,
-      originalInvoiceId: creditNoteData.originalInvoiceId,
-      originalInvoiceRef: creditNoteData.originalInvoiceRef,
-      client: selectedInvoice.client,
-      date: new Date().toLocaleDateString("fr-FR"),
-      reason: creditNoteData.reason,
-      type: creditNoteData.type,
-      amountHT: creditNoteData.amountHT,
-      amountTTC: creditNoteData.amountTTC,
-      description: creditNoteData.description,
-      status: "Brouillon",
-    };
-
-    // Ajouter l'avoir à la liste
-    setCreditNotes((prev) => [newCreditNote, ...prev]);
-
-    // Afficher une confirmation
-    alert(
-      `Avoir ${ref} créé avec succès\nFacture originale: ${creditNoteData.originalInvoiceRef}\nMontant: ${creditNoteData.amountTTC.toFixed(
-        2
-      )} € TTC\n\nL'avoir est disponible dans l'onglet "Avoirs".`
-    );
-
-    // Basculer vers l'onglet des avoirs
-    setActiveTab("creditNotes");
+      alert(
+        `Avoir ${ref} créé avec succès\nFacture originale : ${creditNoteData.originalInvoiceRef}`
+      );
+      setActiveTab("creditNotes");
+      reloadInvoices();
+    } catch (e: any) {
+      console.error("Création avoir impossible", e);
+      alert(e?.response?.data?.error || "Création de l'avoir impossible");
+    }
   };
 
   const activeFiltersCount = [
@@ -388,10 +454,21 @@ export function FacturationPage() {
       {/* Contenu selon l'onglet actif */}
       <AnimatePresence mode="wait">
         {activeTab === "preparation" && (
-          <PreparationTab key="preparation" currentTheme={currentTheme} />
+          <PreparationTab
+            key="preparation"
+            currentTheme={currentTheme}
+            resumeDraft={resumeDraft}
+            onResumeConsumed={() => setResumeDraft(null)}
+            onDraftCreated={() => setActiveTab("initiated")}
+            onInvoiceEmitted={() => setActiveTab("invoices")}
+          />
         )}
         {activeTab === "initiated" && (
-          <InitiatedInvoicesTab key="initiated" currentTheme={currentTheme} />
+          <InitiatedInvoicesTab
+            key="initiated"
+            currentTheme={currentTheme}
+            onResume={handleResumeDraft}
+          />
         )}
         {activeTab === "invoices" && (
           <motion.div key="invoices" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
@@ -433,7 +510,7 @@ export function FacturationPage() {
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => alert("Créer une nouvelle facture")}
+            onClick={() => setIsCreateDraftModalOpen(true)}
             className="flex items-center gap-2 px-6 py-3 text-white rounded-lg font-medium shadow-sm"
             style={{ backgroundColor: currentTheme.colors.primary }}
           >
@@ -797,6 +874,8 @@ export function FacturationPage() {
               index={index}
               onSendEmail={handleOpenEmailModal}
               onCreateCreditNote={handleOpenCreditNoteModal}
+              onMarkPaid={handleMarkPaid}
+              onMarkSent={handleMarkSent}
             />
           ))}
         </div>
@@ -996,16 +1075,301 @@ export function FacturationPage() {
         invoice={selectedInvoice}
         onCreate={handleCreateCreditNote}
       />
+
+      <CreateInvoiceDraftModal
+        isOpen={isCreateDraftModalOpen}
+        onClose={() => setIsCreateDraftModalOpen(false)}
+        onCreate={handleCreateDraft}
+      />
     </div>
   );
 }
 
 // Onglet Préparation
-function PreparationTab({ currentTheme }: { currentTheme: any }) {
+function PreparationTab({
+  currentTheme,
+  resumeDraft,
+  onResumeConsumed,
+  onDraftCreated,
+  onInvoiceEmitted,
+}: {
+  currentTheme: any;
+  resumeDraft?: RawInvoiceDraft | null;
+  onResumeConsumed?: () => void;
+  onDraftCreated?: () => void;
+  onInvoiceEmitted?: (invoiceNumber: string) => void;
+}) {
   const [selectedClient, setSelectedClient] = useState("");
-  const [selectedMonth, setSelectedMonth] = useState("Mai 2026");
-  const [paymentCondition, setPaymentCondition] = useState("Condition par défaut");
-  const [bankAccount, setBankAccount] = useState("BP RIVES DE PARI...");
+  const now = new Date();
+  const monthInput = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [selectedMonth, setSelectedMonth] = useState(monthInput);
+  const clientIdNum = selectedClient ? Number(selectedClient) : null;
+  const { data: clients, loading: clientsLoading } = useClients({ activeOnly: true });
+  const { data: paymentTermsData, loading: paymentTermsLoading } = usePaymentTerms(clientIdNum);
+  const { data: bankAccounts, loading: bankAccountsLoading } = useBankAccounts();
+  const [paymentTermId, setPaymentTermId] = useState<number>(0);
+  const [bankAccountId, setBankAccountId] = useState<number>(0);
+  // Bandeau informatif "brouillon repris" affiché tant que l'utilisateur n'a
+  // pas modifié les filtres pré-remplis.
+  const [resumedInfo, setResumedInfo] = useState<{ draftId: number; client: string; month: string } | null>(null);
+
+  // ─── Chargement des missions à facturer ─────────────────────────────────
+  const [loadedMissions, setLoadedMissions] = useState<RawMission[]>([]);
+  const [loadingMissions, setLoadingMissions] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [unitPrices, setUnitPrices] = useState<Record<number, number>>({});
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+
+  // Hydrate les filtres à partir d'un brouillon transmis par InitiatedInvoicesTab.
+  useEffect(() => {
+    if (!resumeDraft) return;
+    if (resumeDraft.client_id != null) setSelectedClient(String(resumeDraft.client_id));
+    if (resumeDraft.month) setSelectedMonth(resumeDraft.month);
+    if (resumeDraft.payment_condition_id != null) setPaymentTermId(Number(resumeDraft.payment_condition_id));
+    if (resumeDraft.bank_account_id != null) setBankAccountId(Number(resumeDraft.bank_account_id));
+    setResumedInfo({
+      draftId: resumeDraft.draft_id,
+      client: resumeDraft.client_name || "",
+      month: resumeDraft.month || "",
+    });
+    onResumeConsumed?.();
+  }, [resumeDraft, onResumeConsumed]);
+
+  useEffect(() => {
+    if (paymentTermsData.defaultId && paymentTermId === 0) {
+      setPaymentTermId(paymentTermsData.defaultId);
+    }
+  }, [paymentTermsData.defaultId, paymentTermId]);
+
+  useEffect(() => {
+    const def = bankAccounts.find((b) => b.isDefault);
+    if (def && bankAccountId === 0) setBankAccountId(def.id);
+  }, [bankAccounts, bankAccountId]);
+
+  // Reset des missions chargées si le client/mois changent → cohérence avec les filtres
+  useEffect(() => {
+    setLoadedMissions([]);
+    setSelectedIds(new Set());
+    setUnitPrices({});
+    setLoadError(null);
+    setSaveError(null);
+    setSaveSuccess(null);
+  }, [clientIdNum, selectedMonth]);
+
+  // Charge les missions non facturées pour le client + mois sélectionnés.
+  async function handleLoadMissions() {
+    setSaveError(null);
+    setSaveSuccess(null);
+    if (!clientIdNum) {
+      setLoadError("Sélectionnez un client.");
+      return;
+    }
+    if (!selectedMonth || !/^\d{4}-\d{2}$/.test(selectedMonth)) {
+      setLoadError("Sélectionnez un mois valide.");
+      return;
+    }
+    setLoadError(null);
+    setLoadingMissions(true);
+    try {
+      const [year, month] = selectedMonth.split("-").map(Number);
+      const dateStart = `${selectedMonth}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const dateEnd = `${selectedMonth}-${String(lastDay).padStart(2, "0")}`;
+      const res = await api.get("get_missions_datatable.php", {
+        params: {
+          clientId: clientIdNum,
+          dateStart,
+          dateEnd,
+          clientBilledStatus: "non facturée",
+          pageSize: 500,
+          page: 1,
+        },
+      });
+      const missions: RawMission[] = res.data?.missions ?? [];
+      setLoadedMissions(missions);
+      // Toutes les missions cochées par défaut, prix unitaire à 0 (à saisir).
+      setSelectedIds(new Set(missions.map((m) => m.rowid)));
+      const prices: Record<number, number> = {};
+      missions.forEach((m) => {
+        prices[m.rowid] = 0;
+      });
+      setUnitPrices(prices);
+      if (missions.length === 0) {
+        setLoadError("Aucune mission non facturée trouvée pour ce client sur cette période.");
+      }
+    } catch (e: any) {
+      setLoadError(e?.response?.data?.error || e?.message || "Erreur lors du chargement des missions.");
+    } finally {
+      setLoadingMissions(false);
+    }
+  }
+
+  // Bascule / tout cocher / décocher.
+  function toggleSelection(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function toggleAll() {
+    if (selectedIds.size === loadedMissions.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(loadedMissions.map((m) => m.rowid)));
+    }
+  }
+
+  // Total HT calculé à partir des missions cochées + prix unitaires saisis.
+  const selectedTotals = useMemo(() => {
+    let count = 0;
+    let totalHt = 0;
+    loadedMissions.forEach((m) => {
+      if (!selectedIds.has(m.rowid)) return;
+      const price = unitPrices[m.rowid] || 0;
+      const qty = m.dureemission && m.dureemission > 0 ? m.dureemission : 1;
+      totalHt += price * qty;
+      count += 1;
+    });
+    return { count, totalHt };
+  }, [loadedMissions, selectedIds, unitPrices]);
+
+  // Enregistre le brouillon + les lignes détaillées (2 appels API).
+  // Renvoie { draftId, linesCount, totalHt } sur succès, ou null sur erreur (le
+  // setter d'erreur est déjà appelé par la fonction avant de renvoyer null).
+  async function persistDraft(): Promise<{ draftId: number; linesCount: number; totalHt: number } | null> {
+    if (!clientIdNum) {
+      setSaveError("Sélectionnez un client.");
+      return null;
+    }
+    const client = clients.find((c) => c.id === clientIdNum);
+    const clientName = client?.name || "";
+    if (!clientName) {
+      setSaveError("Client introuvable.");
+      return null;
+    }
+    if (selectedIds.size === 0) {
+      setSaveError("Sélectionnez au moins une mission à facturer.");
+      return null;
+    }
+    const missionsToBill = loadedMissions.filter((m) => selectedIds.has(m.rowid));
+    const anyPriced = missionsToBill.some((m) => (unitPrices[m.rowid] || 0) > 0);
+    if (!anyPriced) {
+      setSaveError("Saisissez au moins un prix unitaire (> 0) avant d'enregistrer.");
+      return null;
+    }
+
+    // 1) Créer ou mettre à jour l'en-tête du brouillon.
+    const draftRes = await crud.saveInvoiceDraft({
+      draft_id: resumedInfo?.draftId,
+      client_id: clientIdNum,
+      client_name: clientName,
+      month: selectedMonth,
+      total_ht: selectedTotals.totalHt,
+      payment_condition_id: paymentTermId || undefined,
+      bank_account_id: bankAccountId || undefined,
+    });
+    const draftId: number | undefined = draftRes?.draft_id ?? resumedInfo?.draftId;
+    if (!draftId) {
+      setSaveError("Le serveur n'a pas renvoyé d'ID de brouillon.");
+      return null;
+    }
+
+    // 2) Sauvegarder les lignes détaillées (tble_client_invoice_lines).
+    const lines = missionsToBill.map((m, idx) => {
+      const price = unitPrices[m.rowid] || 0;
+      const qty = m.dureemission && m.dureemission > 0 ? m.dureemission : 1;
+      const dateLabel = m.datemission_iso || "";
+      const designationParts = [
+        m.produit_label || "Prestation",
+        m.interpreter_name || null,
+        dateLabel || null,
+      ].filter(Boolean);
+      return {
+        mission_id: m.rowid,
+        mission_ref: m.reference_devis || "",
+        designation: designationParts.join(" — "),
+        quantity: qty,
+        unit_price_ht: price,
+        total_ht: price * qty,
+        tva_rate: 0,
+        sort_order: idx,
+      };
+    });
+
+    await crud.saveInvoiceDraftLines({
+      draft_id: draftId,
+      client_name: clientName,
+      period_month: `${selectedMonth}-01`,
+      lines,
+    });
+
+    return { draftId, linesCount: lines.length, totalHt: selectedTotals.totalHt };
+  }
+
+  async function handleSaveDraft() {
+    setSaveError(null);
+    setSaveSuccess(null);
+    setSavingDraft(true);
+    try {
+      const res = await persistDraft();
+      if (!res) return; // erreur déjà signalée
+      setSaveSuccess(
+        `Brouillon #${res.draftId} sauvegardé avec ${res.linesCount} ligne(s) — Total : ${res.totalHt.toFixed(2)} €. Retrouvez-le dans « Factures initiées » pour le reprendre ou le finaliser.`
+      );
+      setLoadedMissions([]);
+      setSelectedIds(new Set());
+      setUnitPrices({});
+      setResumedInfo(null);
+      onDraftCreated?.();
+    } catch (e: any) {
+      setSaveError(e?.response?.data?.error || e?.message || "Erreur lors de la sauvegarde du brouillon.");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  // Flux atomique : sauvegarde le brouillon puis émet immédiatement la facture
+  // définitive côté serveur (numéro FAC réservé atomiquement, PDF généré et
+  // archivé, brouillon supprimé — le tout dans une transaction PDO).
+  async function handleCreateInvoiceNow() {
+    setSaveError(null);
+    setSaveSuccess(null);
+    setCreatingInvoice(true);
+    try {
+      const persisted = await persistDraft();
+      if (!persisted) return;
+      const emitRes = await crud.emitInvoice({
+        draft_id: persisted.draftId,
+        status: "validated",
+      });
+      if (!emitRes?.success) {
+        setSaveError("Émission refusée par le serveur.");
+        return;
+      }
+      setSaveSuccess(
+        `Facture ${emitRes.invoice_number} émise avec succès (Total : ${emitRes.total_ht.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € HT). Le PDF est archivé.`
+      );
+      setLoadedMissions([]);
+      setSelectedIds(new Set());
+      setUnitPrices({});
+      setResumedInfo(null);
+      onInvoiceEmitted?.(emitRes.invoice_number);
+    } catch (e: any) {
+      setSaveError(
+        e?.response?.data?.error ||
+          e?.message ||
+          "Erreur lors de l'émission de la facture."
+      );
+    } finally {
+      setCreatingInvoice(false);
+    }
+  }
 
   return (
     <motion.div
@@ -1016,6 +1380,37 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
       <p className="text-sm mb-6" style={{ color: currentTheme.colors.textLight }}>
         Factures sauvegardées mais non encore finalisées
       </p>
+
+      {resumedInfo && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-start gap-3 p-4 mb-6 rounded-lg border"
+          style={{
+            backgroundColor: currentTheme.colors.primaryLight,
+            borderColor: currentTheme.colors.primary,
+            color: currentTheme.colors.primary,
+          }}
+        >
+          <RefreshCw className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 text-sm">
+            <p className="font-semibold">Brouillon #{resumedInfo.draftId} repris</p>
+            <p className="mt-0.5" style={{ color: currentTheme.colors.text }}>
+              Client, mois et paramètres de facturation ont été pré-remplis à partir du brouillon
+              {resumedInfo.client ? ` de « ${resumedInfo.client} »` : ""}
+              {resumedInfo.month ? ` (${resumedInfo.month})` : ""}. Vous pouvez ajuster puis charger les missions.
+            </p>
+          </div>
+          <button
+            onClick={() => setResumedInfo(null)}
+            className="p-1 rounded hover:bg-white/20"
+            style={{ color: currentTheme.colors.primary }}
+            title="Masquer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </motion.div>
+      )}
 
       {/* Filtres de préparation */}
       <motion.div
@@ -1042,11 +1437,10 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
                   color: currentTheme.colors.text,
                 }}
               >
-                <option value="">Sélectionner un client</option>
-                <option>CADA Marseille - Groupe SOS Solidarités</option>
-                <option>HOPITAL EMILE ROUX</option>
-                <option>Tribunal de Paris</option>
-                <option>ATPA Grenoble Port de Claix</option>
+                <option value="">{clientsLoading ? "Chargement…" : "Sélectionner un client"}</option>
+                {clients.map((c) => (
+                  <option key={c.id ?? c.name} value={String(c.id ?? "")}>{c.name}</option>
+                ))}
               </select>
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: currentTheme.colors.textLight }} />
             </div>
@@ -1057,21 +1451,16 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
               Mois
             </label>
             <div className="relative">
-              <select
+              <input
+                type="month"
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all appearance-none"
+                className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all"
                 style={{
                   borderColor: currentTheme.colors.border,
                   color: currentTheme.colors.text,
                 }}
-              >
-                <option>Mai 2026</option>
-                <option>Avril 2026</option>
-                <option>Mars 2026</option>
-                <option>Février 2026</option>
-                <option>Janvier 2026</option>
-              </select>
+              />
               <Calendar className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none" style={{ color: currentTheme.colors.textLight }} />
             </div>
           </div>
@@ -1082,18 +1471,18 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
             </label>
             <div className="relative">
               <select
-                value={paymentCondition}
-                onChange={(e) => setPaymentCondition(e.target.value)}
+                value={paymentTermId}
+                onChange={(e) => setPaymentTermId(Number(e.target.value))}
                 className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all appearance-none"
                 style={{
                   borderColor: currentTheme.colors.border,
                   color: currentTheme.colors.text,
                 }}
               >
-                <option>Condition par défaut</option>
-                <option>30 jours</option>
-                <option>45 jours</option>
-                <option>60 jours</option>
+                <option value={0}>{paymentTermsLoading ? "Chargement…" : "—"}</option>
+                {paymentTermsData.terms.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}{t.isDefault ? " (défaut)" : ""}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -1104,17 +1493,18 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
             </label>
             <div className="relative">
               <select
-                value={bankAccount}
-                onChange={(e) => setBankAccount(e.target.value)}
+                value={bankAccountId}
+                onChange={(e) => setBankAccountId(Number(e.target.value))}
                 className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2 transition-all appearance-none"
                 style={{
                   borderColor: currentTheme.colors.border,
                   color: currentTheme.colors.text,
                 }}
               >
-                <option>BP RIVES DE PARI...</option>
-                <option>Compte principal</option>
-                <option>Compte secondaire</option>
+                <option value={0}>{bankAccountsLoading ? "Chargement…" : "—"}</option>
+                {bankAccounts.map((b) => (
+                  <option key={b.id} value={b.id}>{b.bankLabel || b.bankName || `Compte #${b.id}`}{b.isDefault ? " (défaut)" : ""}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -1122,48 +1512,318 @@ function PreparationTab({ currentTheme }: { currentTheme: any }) {
 
         <div className="flex justify-end gap-3">
           <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="px-6 py-3 rounded-lg font-medium flex items-center gap-2"
+            whileHover={{ scale: loadingMissions ? 1 : 1.02 }}
+            whileTap={{ scale: loadingMissions ? 1 : 0.98 }}
+            disabled={loadingMissions || savingDraft}
+            onClick={handleLoadMissions}
+            className="px-6 py-3 rounded-lg font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               backgroundColor: currentTheme.colors.primaryLight,
               color: currentTheme.colors.primary,
             }}
           >
-            <RefreshCw className="w-4 h-4" />
-            Charger les missions
+            <RefreshCw className={`w-4 h-4 ${loadingMissions ? "animate-spin" : ""}`} />
+            {loadingMissions ? "Chargement…" : "Charger les missions"}
           </motion.button>
           <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            className="px-6 py-3 text-white rounded-lg font-medium flex items-center gap-2"
+            whileHover={{ scale: savingDraft || loadedMissions.length === 0 ? 1 : 1.02 }}
+            whileTap={{ scale: savingDraft || loadedMissions.length === 0 ? 1 : 0.98 }}
+            disabled={savingDraft || creatingInvoice || loadedMissions.length === 0 || selectedIds.size === 0}
+            onClick={handleSaveDraft}
+            title="Enregistre le travail en cours comme brouillon dans « Factures initiées ». Reprenable à volonté avant validation définitive."
+            className="px-6 py-3 text-white rounded-lg font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ backgroundColor: currentTheme.colors.primary }}
           >
-            <Plus className="w-4 h-4" />
-            Créer la facture
+            <Save className="w-4 h-4" />
+            {savingDraft ? "Enregistrement…" : "Sauvegarder"}
+          </motion.button>
+          <motion.button
+            whileHover={{ scale: creatingInvoice || loadedMissions.length === 0 || selectedIds.size === 0 ? 1 : 1.02 }}
+            whileTap={{ scale: creatingInvoice || loadedMissions.length === 0 || selectedIds.size === 0 ? 1 : 0.98 }}
+            disabled={savingDraft || creatingInvoice || loadedMissions.length === 0 || selectedIds.size === 0}
+            onClick={handleCreateInvoiceNow}
+            title="Émission définitive : réserve un numéro FAC-XXX, génère le PDF côté serveur et l'archive dans une transaction atomique. Aucun retour possible ensuite."
+            className="px-6 py-3 text-white rounded-lg font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ backgroundColor: currentTheme.colors.success || "#10b981" }}
+          >
+            <Lock className="w-4 h-4" />
+            {creatingInvoice ? "Émission…" : "Créer la facture"}
           </motion.button>
         </div>
       </motion.div>
 
-      {/* État vide */}
-      <EmptyState
-        icon={FileText}
-        title="Aucune mission à afficher"
-        description="Saisissez un client, choisissez un mois puis cliquez sur 'Charger les missions' pour préparer la facture."
-      />
+      {/* Messages d'état */}
+      {loadError && (
+        <div
+          className="p-4 mb-4 rounded-lg border flex items-start gap-3"
+          style={{
+            backgroundColor: currentTheme.colors.warning + "20",
+            borderColor: currentTheme.colors.warning,
+            color: currentTheme.colors.warning,
+          }}
+        >
+          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p className="text-sm">{loadError}</p>
+        </div>
+      )}
+      {saveError && (
+        <div
+          className="p-4 mb-4 rounded-lg border flex items-start gap-3"
+          style={{
+            backgroundColor: (currentTheme.colors.error || "#ef4444") + "20",
+            borderColor: currentTheme.colors.error || "#ef4444",
+            color: currentTheme.colors.error || "#ef4444",
+          }}
+        >
+          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p className="text-sm">{saveError}</p>
+        </div>
+      )}
+      {saveSuccess && (
+        <div
+          className="p-4 mb-4 rounded-lg border flex items-start gap-3"
+          style={{
+            backgroundColor: (currentTheme.colors.success || "#10b981") + "20",
+            borderColor: currentTheme.colors.success || "#10b981",
+            color: currentTheme.colors.success || "#10b981",
+          }}
+        >
+          <CheckCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p className="text-sm">{saveSuccess}</p>
+        </div>
+      )}
+
+      {/* Tableau des missions chargées, ou état vide */}
+      {loadedMissions.length === 0 ? (
+        <EmptyState
+          icon={FileText}
+          title="Aucune mission à afficher"
+          description="Saisissez un client, choisissez un mois puis cliquez sur « Charger les missions ». Ensuite « Sauvegarder » range votre travail dans « Factures initiées » (reprenable) ; « Créer la facture » l'émettra définitivement avec un numéro FAC-XXX et un PDF archivé côté serveur."
+        />
+      ) : (
+        <motion.div
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="rounded-xl border overflow-hidden shadow-sm mb-6"
+          style={{
+            backgroundColor: currentTheme.colors.surface,
+            borderColor: currentTheme.colors.border,
+          }}
+        >
+          <div className="p-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${currentTheme.colors.border}` }}>
+            <div>
+              <p className="font-semibold" style={{ color: currentTheme.colors.text }}>
+                {loadedMissions.length} mission(s) non facturée(s)
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: currentTheme.colors.textLight }}>
+                {selectedTotals.count} sélectionnée(s) — Saisissez le PU HT pour chaque ligne à facturer.
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs" style={{ color: currentTheme.colors.textLight }}>Total HT sélectionné</p>
+              <p className="text-lg font-bold" style={{ color: currentTheme.colors.primary }}>
+                {selectedTotals.totalHt.toFixed(2)} €
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ backgroundColor: currentTheme.colors.primaryLight }}>
+                  <th className="px-3 py-2 text-left" style={{ color: currentTheme.colors.primary }}>
+                    <input
+                      type="checkbox"
+                      checked={loadedMissions.length > 0 && selectedIds.size === loadedMissions.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < loadedMissions.length;
+                      }}
+                      onChange={toggleAll}
+                    />
+                  </th>
+                  <th className="px-3 py-2 text-left font-semibold" style={{ color: currentTheme.colors.primary }}>Réf.</th>
+                  <th className="px-3 py-2 text-left font-semibold" style={{ color: currentTheme.colors.primary }}>Date</th>
+                  <th className="px-3 py-2 text-left font-semibold" style={{ color: currentTheme.colors.primary }}>Prestation</th>
+                  <th className="px-3 py-2 text-left font-semibold" style={{ color: currentTheme.colors.primary }}>Interprète</th>
+                  <th className="px-3 py-2 text-right font-semibold" style={{ color: currentTheme.colors.primary }}>Durée (h)</th>
+                  <th className="px-3 py-2 text-right font-semibold" style={{ color: currentTheme.colors.primary }}>PU HT (€)</th>
+                  <th className="px-3 py-2 text-right font-semibold" style={{ color: currentTheme.colors.primary }}>Total HT (€)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loadedMissions.map((m) => {
+                  const checked = selectedIds.has(m.rowid);
+                  const price = unitPrices[m.rowid] || 0;
+                  const qty = m.dureemission && m.dureemission > 0 ? m.dureemission : 1;
+                  const total = price * qty;
+                  return (
+                    <tr
+                      key={m.rowid}
+                      style={{
+                        borderTop: `1px solid ${currentTheme.colors.border}`,
+                        opacity: checked ? 1 : 0.5,
+                      }}
+                    >
+                      <td className="px-3 py-2">
+                        <input type="checkbox" checked={checked} onChange={() => toggleSelection(m.rowid)} />
+                      </td>
+                      <td className="px-3 py-2" style={{ color: currentTheme.colors.text }}>{m.reference_devis || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: currentTheme.colors.text }}>{m.datemission_iso || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: currentTheme.colors.text }}>{m.produit_label || "—"}</td>
+                      <td className="px-3 py-2" style={{ color: currentTheme.colors.text }}>{m.interpreter_name || "—"}</td>
+                      <td className="px-3 py-2 text-right" style={{ color: currentTheme.colors.text }}>{qty}</td>
+                      <td className="px-3 py-2 text-right">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={price}
+                          onChange={(e) =>
+                            setUnitPrices((prev) => ({ ...prev, [m.rowid]: Number(e.target.value) || 0 }))
+                          }
+                          disabled={!checked}
+                          className="w-24 px-2 py-1 border rounded text-right disabled:opacity-50"
+                          style={{
+                            borderColor: currentTheme.colors.border,
+                            color: currentTheme.colors.text,
+                            backgroundColor: currentTheme.colors.background,
+                          }}
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold" style={{ color: currentTheme.colors.text }}>
+                        {total.toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
+      )}
     </motion.div>
   );
 }
 
 // Onglet Factures initiées
-function InitiatedInvoicesTab({ currentTheme }: { currentTheme: any }) {
-  const initiatedInvoices = [
-    { id: "1", ref: "#60", client: "test", date: "Mai 2026-05", totalHT: "0.00 €" },
-    { id: "2", ref: "#59", client: "test", date: "Mai 2026-05", totalHT: "0.00 €" },
-    { id: "3", ref: "#58", client: "CADA Marseille - Groupe SOS Solidarités - 0516", date: "Mars 2025-03", totalHT: "455.75 € HT" },
-    { id: "4", ref: "#57", client: "CADA Marseille - Groupe SOS Solidarités - 0516", date: "Mars 2025-03", totalHT: "455.75 € HT" },
-    { id: "5", ref: "#56", client: "AAJT (Association d'Aide aux Jeunes Travailleurs) - CADA - 0740", date: "Mars 2025-03", totalHT: "455.75 € HT" },
-  ];
+function InitiatedInvoicesTab({
+  currentTheme,
+  onResume,
+}: {
+  currentTheme: any;
+  onResume: (draft: RawInvoiceDraft) => void;
+}) {
+  // Brouillons (status='draft') filtrés côté serveur par entity via
+  // get_invoice_drafts.php ($currentEntity du token). Sur futurAMI (entity=2)
+  // seuls les brouillons créés dans cette entité seront visibles ; l'historique
+  // AMI (entity=1) reste isolé — c'est le comportement multi-tenant voulu.
+  const { data: rawDrafts, loading, error, refetch } = useInvoiceDrafts({ status: "draft" });
+
+  // Suppression : confirmation inline + appel API
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Émission : confirmation inline + appel API atomique (emit_invoice.php)
+  const [pendingEmitId, setPendingEmitId] = useState<number | null>(null);
+  const [emittingId, setEmittingId] = useState<number | null>(null);
+  const [emitError, setEmitError] = useState<string | null>(null);
+  const [emitSuccess, setEmitSuccess] = useState<string | null>(null);
+
+  const handleConfirmDelete = async (draftId: number) => {
+    setDeletingId(draftId);
+    setDeleteError(null);
+    try {
+      const res = await crud.deleteInvoiceDraft(draftId);
+      if (res?.success) {
+        setPendingDeleteId(null);
+        refetch();
+      } else {
+        setDeleteError(res?.error || "Suppression refusée par le serveur.");
+      }
+    } catch (e: any) {
+      setDeleteError(
+        e?.response?.data?.error ||
+          e?.message ||
+          "Erreur réseau pendant la suppression."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleConfirmEmit = async (draftId: number) => {
+    setEmittingId(draftId);
+    setEmitError(null);
+    setEmitSuccess(null);
+    try {
+      const res = await crud.emitInvoice({ draft_id: draftId, status: "validated" });
+      if (res?.success) {
+        setPendingEmitId(null);
+        setEmitSuccess(
+          `Facture ${res.invoice_number} émise avec succès (Total : ${res.total_ht.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € HT). Retrouvez-la dans « Factures ».`
+        );
+        refetch();
+      } else {
+        setEmitError("Émission refusée par le serveur.");
+      }
+    } catch (e: any) {
+      setEmitError(
+        e?.response?.data?.error ||
+          e?.message ||
+          "Erreur réseau pendant l'émission."
+      );
+    } finally {
+      setEmittingId(null);
+    }
+  };
+
+  const handlePreviewPdf = async (draftId: number) => {
+    try {
+      await crud.previewInvoicePdf(draftId);
+    } catch (e: any) {
+      // Le back renvoie du JSON en cas d'erreur, mais responseType='blob' force
+      // axios à mettre la réponse dans un Blob. On tente de le relire en texte
+      // pour extraire le vrai message d'erreur.
+      let msg = e?.message || "Impossible d'ouvrir l'aperçu PDF.";
+      const blob: Blob | undefined = e?.response?.data;
+      if (blob && typeof blob.text === "function") {
+        try {
+          const text = await blob.text();
+          const json = JSON.parse(text);
+          msg = json?.error || json?.message || msg;
+        } catch {
+          /* pas du JSON — on garde le message par défaut */
+        }
+      }
+      alert(msg);
+    }
+  };
+
+  // Format d'affichage "Mois YYYY" à partir d'une clé "YYYY-MM"
+  const formatMonth = (raw: string | null | undefined): string => {
+    if (!raw) return "";
+    const m = /^(\d{4})-(\d{2})/.exec(raw);
+    if (!m) return raw;
+    const year = m[1];
+    const monthIndex = Number(m[2]) - 1;
+    const MONTHS_FR = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+    return `${MONTHS_FR[monthIndex] ?? m[2]} ${year}`;
+  };
+  const formatEuro = (amount: number): string =>
+    `${amount.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € HT`;
+
+  const initiatedInvoices = useMemo(
+    () =>
+      (rawDrafts ?? []).map((d) => ({
+        id: d.draft_id,
+        ref: `#${d.draft_id}`,
+        client: d.client_name || "—",
+        date: formatMonth(d.month),
+        totalHT: formatEuro(Number(d.total_ht) || 0),
+        raw: d,
+      })),
+    [rawDrafts]
+  );
 
   return (
     <motion.div
@@ -1171,76 +1831,296 @@ function InitiatedInvoicesTab({ currentTheme }: { currentTheme: any }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
     >
-      <p className="text-sm mb-6" style={{ color: currentTheme.colors.textLight }}>
-        Factures sauvegardées mais non encore finalisées
-      </p>
+      <div className="flex items-center justify-between mb-6">
+        <p className="text-sm" style={{ color: currentTheme.colors.textLight }}>
+          Factures sauvegardées mais non encore finalisées
+          {!loading && !error && ` (${initiatedInvoices.length})`}
+        </p>
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => refetch()}
+          className="p-2 rounded-lg flex items-center gap-2 text-sm"
+          style={{
+            color: currentTheme.colors.textLight,
+            border: `1px solid ${currentTheme.colors.border}`,
+          }}
+          title="Rafraîchir"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+          Rafraîchir
+        </motion.button>
+      </div>
+
+      {loading && (
+        <div className="text-sm text-center py-8" style={{ color: currentTheme.colors.textLight }}>
+          Chargement des brouillons…
+        </div>
+      )}
+
+      {error && !loading && (
+        <div
+          className="flex items-center gap-2 p-4 rounded-lg text-sm"
+          style={{
+            backgroundColor: currentTheme.colors.statusExpired.bg,
+            color: currentTheme.colors.statusExpired.text,
+          }}
+        >
+          <AlertCircle className="w-4 h-4" />
+          Impossible de charger les brouillons : {String(error)}
+        </div>
+      )}
+
+      {deleteError && (
+        <div
+          className="flex items-center justify-between gap-2 p-4 mb-4 rounded-lg text-sm"
+          style={{
+            backgroundColor: currentTheme.colors.statusExpired.bg,
+            color: currentTheme.colors.statusExpired.text,
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{deleteError}</span>
+          </div>
+          <button
+            onClick={() => setDeleteError(null)}
+            className="p-1 rounded hover:bg-white/20"
+            title="Fermer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {emitError && (
+        <div
+          className="flex items-center justify-between gap-2 p-4 mb-4 rounded-lg text-sm"
+          style={{
+            backgroundColor: currentTheme.colors.statusExpired.bg,
+            color: currentTheme.colors.statusExpired.text,
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{emitError}</span>
+          </div>
+          <button
+            onClick={() => setEmitError(null)}
+            className="p-1 rounded hover:bg-white/20"
+            title="Fermer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {emitSuccess && (
+        <div
+          className="flex items-center justify-between gap-2 p-4 mb-4 rounded-lg text-sm"
+          style={{
+            backgroundColor: currentTheme.colors.statusValidated.bg,
+            color: currentTheme.colors.statusValidated.text,
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{emitSuccess}</span>
+          </div>
+          <button
+            onClick={() => setEmitSuccess(null)}
+            className="p-1 rounded hover:bg-white/20"
+            title="Fermer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && initiatedInvoices.length === 0 && (
+        <EmptyState
+          icon={FileText}
+          title="Aucune facture initiée"
+          description="Les brouillons de facture apparaîtront ici. Utilisez l'onglet Préparation pour en créer un."
+        />
+      )}
 
       <div className="space-y-3">
-        {initiatedInvoices.map((invoice, index) => (
-          <motion.div
-            key={invoice.id}
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: index * 0.05 }}
-            className="rounded-lg border p-4 hover:shadow-md transition-all"
-            style={{
-              backgroundColor: currentTheme.colors.surface,
-              borderColor: currentTheme.colors.border,
-            }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4 flex-1">
-                <FileText className="w-5 h-5" style={{ color: currentTheme.colors.primary }} />
-                <div className="flex-1">
-                  <div className="flex items-center gap-3">
-                    <span className="font-semibold" style={{ color: currentTheme.colors.text }}>
-                      {invoice.ref}
-                    </span>
-                    <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
-                      •
-                    </span>
-                    <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
-                      {invoice.date}
-                    </span>
-                    <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
-                      •
-                    </span>
-                    <span className="text-sm font-medium" style={{ color: currentTheme.colors.text }}>
-                      Total: {invoice.totalHT}
-                    </span>
+        {initiatedInvoices.map((invoice, index) => {
+          const isPendingDelete = pendingDeleteId === invoice.id;
+          const isDeleting = deletingId === invoice.id;
+          const isPendingEmit = pendingEmitId === invoice.id;
+          const isEmitting = emittingId === invoice.id;
+          const isBusy = isDeleting || isEmitting;
+          return (
+            <motion.div
+              key={invoice.id}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: index * 0.05 }}
+              className="rounded-lg border p-4 hover:shadow-md transition-all"
+              style={{
+                backgroundColor: currentTheme.colors.surface,
+                borderColor: isPendingDelete
+                  ? currentTheme.colors.error
+                  : isPendingEmit
+                  ? currentTheme.colors.success
+                  : currentTheme.colors.border,
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4 flex-1">
+                  <FileText className="w-5 h-5" style={{ color: currentTheme.colors.primary }} />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3">
+                      <span className="font-semibold" style={{ color: currentTheme.colors.text }}>
+                        {invoice.ref}
+                      </span>
+                      <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
+                        •
+                      </span>
+                      <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
+                        {invoice.date}
+                      </span>
+                      <span className="text-sm" style={{ color: currentTheme.colors.textLight }}>
+                        •
+                      </span>
+                      <span className="text-sm font-medium" style={{ color: currentTheme.colors.text }}>
+                        Total: {invoice.totalHT}
+                      </span>
+                    </div>
+                    <p className="text-sm mt-1" style={{ color: currentTheme.colors.text }}>
+                      {invoice.client}
+                    </p>
                   </div>
-                  <p className="text-sm mt-1" style={{ color: currentTheme.colors.text }}>
-                    {invoice.client}
-                  </p>
                 </div>
+                {isPendingDelete ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium" style={{ color: currentTheme.colors.error }}>
+                      Supprimer ce brouillon ?
+                    </span>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => handleConfirmDelete(invoice.id)}
+                      disabled={isDeleting}
+                      className="px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-60"
+                      style={{ backgroundColor: currentTheme.colors.error }}
+                    >
+                      {isDeleting ? "Suppression…" : "Oui, supprimer"}
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setPendingDeleteId(null)}
+                      disabled={isDeleting}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border"
+                      style={{
+                        color: currentTheme.colors.textLight,
+                        borderColor: currentTheme.colors.border,
+                      }}
+                    >
+                      Annuler
+                    </motion.button>
+                  </div>
+                ) : isPendingEmit ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium" style={{ color: currentTheme.colors.success }}>
+                      Émettre définitivement ? (N° FAC attribué, PDF archivé)
+                    </span>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => handleConfirmEmit(invoice.id)}
+                      disabled={isEmitting}
+                      className="px-3 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-60"
+                      style={{ backgroundColor: currentTheme.colors.success }}
+                    >
+                      {isEmitting ? "Émission…" : "Oui, émettre"}
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setPendingEmitId(null)}
+                      disabled={isEmitting}
+                      className="px-3 py-2 rounded-lg text-sm font-medium border"
+                      style={{
+                        color: currentTheme.colors.textLight,
+                        borderColor: currentTheme.colors.border,
+                      }}
+                    >
+                      Annuler
+                    </motion.button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => handlePreviewPdf(invoice.id)}
+                      disabled={isBusy}
+                      className="px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-2 border disabled:opacity-50"
+                      style={{
+                        color: currentTheme.colors.textLight,
+                        borderColor: currentTheme.colors.border,
+                      }}
+                      title="Ouvrir un aperçu PDF avec watermark (le numéro FAC affiché est indicatif, aucun N° n'est consommé)"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Aperçu PDF
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => onResume(invoice.raw)}
+                      disabled={isBusy}
+                      className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                      style={{
+                        backgroundColor: currentTheme.colors.primaryLight,
+                        color: currentTheme.colors.primary,
+                      }}
+                      title="Reprendre ce brouillon dans l'onglet Préparation"
+                    >
+                      Reprendre
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setEmitError(null);
+                        setEmitSuccess(null);
+                        setPendingEmitId(invoice.id);
+                      }}
+                      disabled={isBusy}
+                      className="px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-2 disabled:opacity-50"
+                      style={{ backgroundColor: currentTheme.colors.success }}
+                      title="Émission atomique : réserve le N° FAC définitif, génère le PDF côté serveur, archive et supprime le brouillon en 1 transaction"
+                    >
+                      <Lock className="w-4 h-4" />
+                      Émettre
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => {
+                        setDeleteError(null);
+                        setPendingDeleteId(invoice.id);
+                      }}
+                      disabled={isBusy}
+                      className="p-2 rounded-lg disabled:opacity-50"
+                      style={{
+                        color: currentTheme.colors.error,
+                      }}
+                      title="Supprimer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </motion.button>
+                  </div>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
-                  style={{
-                    backgroundColor: currentTheme.colors.primaryLight,
-                    color: currentTheme.colors.primary,
-                  }}
-                >
-                  Reprendre
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  className="p-2 rounded-lg"
-                  style={{
-                    color: currentTheme.colors.error,
-                  }}
-                  title="Supprimer"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </motion.button>
-              </div>
-            </div>
-          </motion.div>
-        ))}
+            </motion.div>
+          );
+        })}
       </div>
     </motion.div>
   );
@@ -1425,11 +2305,15 @@ function InvoiceCard({
   index,
   onSendEmail,
   onCreateCreditNote,
+  onMarkPaid,
+  onMarkSent,
 }: {
   invoice: Invoice;
   index: number;
   onSendEmail: (invoice: Invoice) => void;
   onCreateCreditNote: (invoice: Invoice) => void;
+  onMarkPaid: (invoice: Invoice) => void;
+  onMarkSent: (invoice: Invoice) => void;
 }) {
   const { currentTheme } = useTheme();
 
@@ -1537,6 +2421,30 @@ function InvoiceCard({
           >
             <FileMinus className="w-4 h-4" />
           </motion.button>
+          {invoice.status !== "Payée" && invoice.status !== "Envoyée" && (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => onMarkSent(invoice)}
+              className="p-2 rounded-lg text-white"
+              style={{ backgroundColor: currentTheme.colors.secondary }}
+              title="Marquer comme envoyée"
+            >
+              <FileText className="w-4 h-4" />
+            </motion.button>
+          )}
+          {invoice.status !== "Payée" && (
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => onMarkPaid(invoice)}
+              className="p-2 rounded-lg text-white"
+              style={{ backgroundColor: currentTheme.colors.success }}
+              title="Marquer comme payée"
+            >
+              <CheckCircle className="w-4 h-4" />
+            </motion.button>
+          )}
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}

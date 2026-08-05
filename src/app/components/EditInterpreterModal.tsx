@@ -20,23 +20,25 @@ interface EditInterpreterModalProps {
   onSave: (interpreter: Interpreter) => void;
 }
 
+const EMPTY_INTERPRETER: Interpreter = {
+  name: "",
+  languages: "",
+  phone: "",
+  email: "",
+  status: "Disponible",
+  billing: "",
+};
+
 export function EditInterpreterModal({ isOpen, onClose, interpreter, onSave }: EditInterpreterModalProps) {
   const { currentTheme } = useTheme();
-  const [formData, setFormData] = useState<Interpreter>({
-    name: "",
-    languages: "",
-    phone: "",
-    email: "",
-    status: "Disponible",
-    billing: "",
-  });
+  const isCreating = !interpreter;
+  const [formData, setFormData] = useState<Interpreter>(EMPTY_INTERPRETER);
 
-  // Mettre à jour les données du formulaire quand l'interprète change
   useEffect(() => {
-    if (interpreter) {
-      setFormData(interpreter);
+    if (isOpen) {
+      setFormData(interpreter ?? EMPTY_INTERPRETER);
     }
-  }, [interpreter]);
+  }, [isOpen, interpreter]);
 
   const handleChange = (field: keyof Interpreter, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -48,10 +50,8 @@ export function EditInterpreterModal({ isOpen, onClose, interpreter, onSave }: E
     onClose();
   };
 
-  if (!interpreter) return null;
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Modifier l'interprète" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={isCreating ? "Nouvel interprète" : "Modifier l'interprète"} size="lg">
       <form onSubmit={handleSubmit}>
         <div className="space-y-6">
           {/* Informations personnelles */}

@@ -1,6 +1,10 @@
 import { motion } from "motion/react";
 import { LogOut, Palette, BarChart3, Settings } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useTheme } from "../contexts/ThemeContext";
+import { useAuthStore } from "../../store/auth";
+import { useCompanyInfo } from "../../lib/hooks";
+import { resolveLogoSrc } from "../../lib/api";
 
 interface HeaderProps {
   activeTab: string;
@@ -10,6 +14,15 @@ interface HeaderProps {
 
 export function Header({ activeTab, onTabChange, userName }: HeaderProps) {
   const { currentTheme } = useTheme();
+  const navigate = useNavigate();
+  const logout = useAuthStore((s) => s.logout);
+  const companyQuery = useCompanyInfo();
+  const logoSrc = resolveLogoSrc(companyQuery.data?.logoUrl);
+
+  const handleLogout = () => {
+    logout();
+    navigate("/login", { replace: true });
+  };
 
   const tabs = [
     { id: "dashboard", label: "Tableau de bord", icon: BarChart3 },
@@ -34,11 +47,17 @@ export function Header({ activeTab, onTabChange, userName }: HeaderProps) {
       <div className="px-8 py-4">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div
-              className={`w-10 h-10 bg-gradient-to-br ${currentTheme.gradient} rounded-lg flex items-center justify-center`}
-            >
-              <span className="text-white font-bold text-sm">AMI</span>
-            </div>
+            {logoSrc ? (
+              // Hauteur fixe, largeur libre : un logo large (rectangulaire) reste
+              // lisible au lieu d'être écrasé dans un badge carré 40x40.
+              <img src={logoSrc} alt="Logo" className="h-10 max-w-[180px] object-contain" />
+            ) : (
+              <div
+                className={`w-10 h-10 bg-gradient-to-br ${currentTheme.gradient} rounded-lg flex items-center justify-center`}
+              >
+                <span className="text-white font-bold text-sm">AMI</span>
+              </div>
+            )}
             <div>
               <h1 className="text-lg font-bold" style={{ color: currentTheme.colors.text }}>
                 AMI - Assistance missions interprètes
@@ -50,6 +69,10 @@ export function Header({ activeTab, onTabChange, userName }: HeaderProps) {
               Bienvenue {userName}
             </span>
             <button
+              type="button"
+              onClick={handleLogout}
+              title="Déconnexion"
+              aria-label="Déconnexion"
               className="flex items-center gap-2 px-4 py-2 rounded-lg transition-colors hover:opacity-80"
               style={{ color: currentTheme.colors.text }}
             >
