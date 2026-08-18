@@ -18,7 +18,9 @@ import {
 
 interface User {
   id: string;
+  username: string;
   name: string;
+  email: string;
   permissions: {
     interpretes: boolean;
     gestInterpretes: boolean;
@@ -94,9 +96,11 @@ export function AdminPage() {
     // Mapper le format User vers le format attendu par EditUserModal
     const modalUser = {
       id: user.id,
+      username: user.username,
       name: user.name,
-      email: `${user.name.toLowerCase().replace(/\s/g, ".")}@ami.fr`,
+      email: user.email,
       role: "Gestionnaire",
+      password: "",
       permissions: {
         missions: user.permissions.missions,
         invoices: false,
@@ -115,7 +119,8 @@ export function AdminPage() {
     try {
       await crud.saveUser({
         id: updatedUser.id || undefined,
-        username: (updatedUser.email || updatedUser.name || "").split("@")[0],
+        username: updatedUser.username || (updatedUser.email || updatedUser.name || "").split("@")[0],
+        password: updatedUser.password || undefined,
         fullname: updatedUser.name,
         email: updatedUser.email,
         can_manage_interpreters: !!updatedUser.permissions?.interpreters,
@@ -148,7 +153,9 @@ export function AdminPage() {
   const usersQuery = useUsers();
   const users: User[] = usersQuery.data.map((u: RawUser) => ({
     id: String(u.id),
+    username: u.username,
     name: u.fullname || u.username,
+    email: u.email,
     permissions: {
       interpretes: !!u.can_manage_interpreters || !!u.is_interpreter,
       gestInterpretes: !!u.can_manage_interpreters,

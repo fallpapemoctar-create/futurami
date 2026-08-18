@@ -20,7 +20,9 @@ interface Mission {
   time: string;
   duration: string;
   interpreter: string;
+  interpreterId?: number | null;
   language: string;
+  languageId?: number | null;
   client: string;
   clientId?: number | null;
   contact: string;
@@ -44,7 +46,9 @@ const EMPTY_MISSION: Mission = {
   time: "",
   duration: "",
   interpreter: "",
+  interpreterId: null,
   language: "",
+  languageId: null,
   client: "",
   clientId: null,
   contact: "",
@@ -213,13 +217,22 @@ export function EditMissionModal({ isOpen, onClose, mission, onSave }: EditMissi
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Résout l'ID du contact démandeur à partir du libellé sélectionné.
+
+    const interpreterMatch = interpreters.find((i) => i.name === formData.interpreter);
+    const languageMatch = languages.find((l) => {
+      const label = l.display_name || l.label || l.ref;
+      return label === formData.language;
+    });
+
     const contactMatch = contacts.find((c) => {
       const name = [c.lastname, c.firstname].filter(Boolean).join(" ") || c.email || "";
       return name === formData.contact;
     });
+
     onSave({
       ...formData,
+      interpreterId: interpreterMatch?.raw?.id ?? formData.interpreterId ?? null,
+      languageId: languageMatch?.id ?? formData.languageId ?? null,
       contactId: contactMatch?.id ?? (formData.contact ? formData.contactId : null),
       clientId: resolvedClientId,
     });

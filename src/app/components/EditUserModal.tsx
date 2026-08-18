@@ -6,9 +6,11 @@ import { Modal } from "./Modal";
 
 interface User {
   id: string;
+  username: string;
   name: string;
   email: string;
   role: string;
+  password?: string;
   permissions: {
     missions: boolean;
     invoices: boolean;
@@ -29,9 +31,11 @@ interface EditUserModalProps {
 
 const EMPTY_USER: User = {
   id: "",
+  username: "",
   name: "",
   email: "",
   role: "",
+  password: "",
   permissions: {
     missions: false,
     invoices: false,
@@ -86,6 +90,23 @@ export function EditUserModal({ isOpen, onClose, user, onSave }: EditUserModalPr
             <div className="grid grid-cols-1 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
+                  Nom d'utilisateur *
+                </label>
+                <input
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => handleChange("username", e.target.value)}
+                  required
+                  className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2"
+                  style={{
+                    borderColor: currentTheme.colors.border,
+                    color: currentTheme.colors.text,
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
                   Nom complet *
                 </label>
                 <input
@@ -110,6 +131,23 @@ export function EditUserModal({ isOpen, onClose, user, onSave }: EditUserModalPr
                   value={formData.email}
                   onChange={(e) => handleChange("email", e.target.value)}
                   required
+                  className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2"
+                  style={{
+                    borderColor: currentTheme.colors.border,
+                    color: currentTheme.colors.text,
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: currentTheme.colors.text }}>
+                  Mot de passe
+                </label>
+                <input
+                  type="password"
+                  value={formData.password ?? ""}
+                  onChange={(e) => handleChange("password", e.target.value)}
+                  placeholder="Laisser vide pour conserver le mot de passe"
                   className="w-full px-4 py-2.5 border rounded-lg focus:outline-none focus:ring-2"
                   style={{
                     borderColor: currentTheme.colors.border,
